@@ -1,0 +1,34 @@
+# Android Studio / IntelliJ IDEA
+*.iml
+.idea/
+.gradle/
+local.properties
+
+# Android build outputs
+build/
+*/build/
+*.apk
+*.ap_
+*.aab
+/captures
+
+# NDK / CMake
+.cxx/
+.externalNativeBuild/
+
+# Gradle wrapper jar (optional - some repos include this)
+# gradle/wrapper/gradle-wrapper.jar
+
+# OS specific
+.DS_Store
+Thumbs.db
+*.swp
+*~
+
+# Compiled native libraries
+*.so
+*.a
+
+
+# Log files
+*.log
