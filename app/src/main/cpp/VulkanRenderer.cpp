@@ -124,31 +124,54 @@ void VulkanRenderer::render() {
 void VulkanRenderer::handleTouchInput(float x, float y, bool isDown) {
     if (isDown) {
         if (!isDragging) {
+            // Touch started - save initial state
             isDragging = true;
-            lastTouchX = x;
-            lastTouchY = y;
+            touchStartX = x;
+            touchStartY = y;
+            currentTouchX = x;
+            currentTouchY = y;
+            rotationAtTouchStart = currentRotation;
         } else {
-            // Calculate drag delta
-            float deltaX = x - lastTouchX;
-            float deltaY = y - lastTouchY;
+            // Touch dragging - calculate total rotation from start position
+            currentTouchX = x;
+            currentTouchY = y;
             
-            // Convert screen delta to rotation angles (only X and Z axes)
+            // Calculate total drag from touch start
+            float totalDeltaX = currentTouchX - touchStartX;
+            float totalDeltaY = currentTouchY - touchStartY;
+            
+            // Camera-relative rotation (like Blender)
+            // Camera is at (2, 2, 2) looking at (0, 0, 0) with up (0, 0, 1)
+            glm::vec3 cameraPos = glm::vec3(2.0f, 2.0f, 2.0f);
+            glm::vec3 cameraTarget = glm::vec3(0.0f, 0.0f, 0.0f);
+            glm::vec3 worldUp = glm::vec3(0.0f, 0.0f, 1.0f);
+            
+            // Calculate camera axes
+            glm::vec3 viewDir = glm::normalize(cameraTarget - cameraPos);
+            glm::vec3 cameraRight = glm::normalize(glm::cross(viewDir, worldUp));
+            glm::vec3 cameraUp = glm::normalize(glm::cross(cameraRight, viewDir));
+            
             float rotationSpeed = 0.003f;
-            float angleX = -deltaY * rotationSpeed; // Pitch (X-axis) - inverted for natural feel
-            float angleZ = deltaX * rotationSpeed; // Roll (Z-axis)
             
-            // Create rotation quaternions for X and Z axes
-            glm::quat rotX = glm::angleAxis(angleX, glm::vec3(1.0f, 0.0f, 0.0f));
-            glm::quat rotZ = glm::angleAxis(angleZ, glm::vec3(0.0f, 0.0f, 1.0f));
+            // Horizontal drag (X) rotates around camera's up axis
+            float angleAroundUp = totalDeltaX * rotationSpeed;
+            // Vertical drag (Y) rotates around camera's right axis
+            float angleAroundRight = totalDeltaY * rotationSpeed;
             
-            // Combine rotations and update target
-            targetRotation = rotZ * rotX * targetRotation;
+            // Create rotation quaternions around camera axes
+            glm::quat rotAroundUp = glm::angleAxis(angleAroundUp, cameraUp);
+            glm::quat rotAroundRight = glm::angleAxis(angleAroundRight, cameraRight);
             
-            lastTouchX = x;
-            lastTouchY = y;
+            // Combine rotations (apply in view space)
+            glm::quat deltaRotation = rotAroundUp * rotAroundRight;
+            
+            // Apply rotation in view space (left multiply) to rotation at touch start
+            targetRotation = deltaRotation * rotationAtTouchStart;
         }
     } else {
+        // Touch released - finalize rotation
         isDragging = false;
+        // currentRotation will smoothly lerp to targetRotation via updateUniformBuffer
     }
 }
 
@@ -486,23 +509,37 @@ void VulkanRenderer::createDescriptorSetLayout() {
 }
 
 void VulkanRenderer::createGraphicsPipeline() {
-    auto vertShaderCode = readFile("shader.vert.spv");
-    auto fragShaderCode = readFile("shader.frag.spv");
+    VkShaderModule vertShaderModule;
+    VkShaderModule fragShaderModule;
     
-    VkShaderModule vertShaderModule = createShaderModule(vertShaderCode);
-    VkShaderModule fragShaderModule = createShaderModule(fragShaderCode);
+    if (useCombinedSPIRV) {
+        // Load single SPIR-V file with both vertex and fragment shaders (Slang)
+        auto combinedShaderCode = readFile("shader.spv");
+        
+        // Create shader modules for each stage from the same SPIR-V code
+        // The entry points are specified in the pipeline stage info
+        vertShaderModule = createShaderModule(combinedShaderCode);
+        fragShaderModule = createShaderModule(combinedShaderCode);
+    } else {
+        // Load separate SPIR-V files (GLSL)
+        auto vertShaderCode = readFile("shader.vert.spv");
+        auto fragShaderCode = readFile("shader.frag.spv");
+        
+        vertShaderModule = createShaderModule(vertShaderCode);
+        fragShaderModule = createShaderModule(fragShaderCode);
+    }
     
     VkPipelineShaderStageCreateInfo vertShaderStageInfo{};
     vertShaderStageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
     vertShaderStageInfo.stage = VK_SHADER_STAGE_VERTEX_BIT;
     vertShaderStageInfo.module = vertShaderModule;
-    vertShaderStageInfo.pName = "main";
+    vertShaderStageInfo.pName = useCombinedSPIRV ? "vertexMain" : "main";
     
     VkPipelineShaderStageCreateInfo fragShaderStageInfo{};
     fragShaderStageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
     fragShaderStageInfo.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
     fragShaderStageInfo.module = fragShaderModule;
-    fragShaderStageInfo.pName = "main";
+    fragShaderStageInfo.pName = useCombinedSPIRV ? "fragmentMain" : "main";
     
     VkPipelineShaderStageCreateInfo shaderStages[] = {vertShaderStageInfo, fragShaderStageInfo};
     
@@ -646,22 +683,19 @@ void VulkanRenderer::createCommandPool() {
     }
 }
 
-void VulkanRenderer::createColorResources() {
-    VkFormat colorFormat = swapChainImageFormat;
-    
-    createImage(swapChainExtent.width, swapChainExtent.height, 1, msaaSamples, colorFormat,
-                VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
-                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, colorImage, colorImageMemory);
-    colorImageView = createImageView(colorImage, colorFormat, VK_IMAGE_ASPECT_COLOR_BIT, 1);
-}
-
 void VulkanRenderer::createDepthResources() {
     VkFormat depthFormat = findDepthFormat();
     
-    createImage(swapChainExtent.width, swapChainExtent.height, 1, VK_SAMPLE_COUNT_1_BIT, depthFormat,
+    createImage(swapChainExtent.width, swapChainExtent.height, 1, msaaSamples, depthFormat,
                 VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
                 VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, depthImage, depthImageMemory);
-    depthImageView = createImageView(depthImage, depthFormat, VK_IMAGE_ASPECT_DEPTH_BIT, 1);
+    
+    VkImageAspectFlags aspectFlags = VK_IMAGE_ASPECT_DEPTH_BIT;
+    if (hasStencilComponent(depthFormat)) {
+        aspectFlags |= VK_IMAGE_ASPECT_STENCIL_BIT;
+    }
+    
+    depthImageView = createImageView(depthImage, depthFormat, aspectFlags, 1);
 }
 
 void VulkanRenderer::createTextureImage() {
@@ -1093,10 +1127,17 @@ void VulkanRenderer::recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t
 }
 
 void VulkanRenderer::updateUniformBuffer(uint32_t currentImage) {
-    // Smoothly interpolate current rotation towards target using slerp
-    // Lower value = smoother (good for high FPS like 1000)
-    float slerpSpeed = 0.008f;
-    currentRotation = glm::slerp(currentRotation, targetRotation, slerpSpeed);
+    // Frame-rate independent slerp (locked to 60 FPS behavior)
+    static auto lastUpdateTime = std::chrono::high_resolution_clock::now();
+    auto currentTime = std::chrono::high_resolution_clock::now();
+    float deltaTime = std::chrono::duration<float>(currentTime - lastUpdateTime).count();
+    lastUpdateTime = currentTime;
+    
+    // Base slerp speed for 60 FPS (1/60 = 0.0167 seconds per frame)
+    float baseSlerpSpeed = 0.1f; // Speed at 60 FPS
+    // Normalize to 60 FPS: multiply by deltaTime * 60
+    float slerpFactor = glm::clamp(baseSlerpSpeed * deltaTime * 60.0f, 0.0f, 1.0f);
+    currentRotation = glm::slerp(currentRotation, targetRotation, slerpFactor);
     
     UniformBufferObject ubo{};
     // Use quaternion rotation instead of auto-rotation

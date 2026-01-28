@@ -29,6 +29,7 @@ High-performance Vulkan renderer for Android using NativeActivity. Renders the c
 
 ### Graphics & Libraries
 - **Vulkan API**: 1.0
+- **Slang Shader Compiler**: Latest (unified shader language)
 - **GLM**: 1.0.3 (header-only math library)
 - **STB Image**: Latest (single-header image loader)
 - **tiny_obj_loader**: Latest (OBJ model parser)
@@ -43,6 +44,7 @@ High-performance Vulkan renderer for Android using NativeActivity. Renders the c
 - **Android Studio**: Ladybug (2024.2.1) or newer
 - **JDK**: 17 or higher (for Gradle 8.9+)
 - **Vulkan Device**: Android 7.0+ (API 24+) with Vulkan support
+- **Slang Compiler**: Optional, for shader compilation (https://shader-slang.com/)
 - **Emulator**: Configure with host GPU mode for best performance (can achieve 3000+ FPS)
 
 ## Build Instructions
@@ -53,13 +55,24 @@ High-performance Vulkan renderer for Android using NativeActivity. Renders the c
    cd androidCpp
    ```
 
-2. Compile shaders (if you modify them):
+2. Compile shaders:
+
+   **Option A: Using Slang (Recommended - Single SPIR-V file)**
+   ```bash
+   cd app/src/main/assets
+   slangc shader.slang -target spirv -entry vertexMain -stage vertex -entry fragmentMain -stage fragment -o shader.spv
+   ```
+   Set `useCombinedSPIRV = true` in `VulkanRenderer.h` (default)
+
+   **Option B: Using GLSL (Separate shader files)**
    ```bash
    cd app/src/main/assets
    glslc shader.vert -o shader.vert.spv
    glslc shader.frag -o shader.frag.spv
    ```
-   *Note: Compiled shaders (.spv) are included, so this step is optional*
+   Set `useCombinedSPIRV = false` in `VulkanRenderer.h`
+
+   *Note: Compiled shaders are included, so this step is optional unless modifying shaders*
 
 3. Open project in Android Studio or build via command line:
    ```bash

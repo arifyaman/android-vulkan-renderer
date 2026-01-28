@@ -75,6 +75,9 @@ private:
     
     // Validation layers are not available on Android devices
     const bool enableValidationLayers = false;
+    
+    // Use combined SPIR-V file (Slang) or separate shader files (GLSL)
+    const bool useCombinedSPIRV = true;
 
     // Vulkan objects
     VkInstance instance = VK_NULL_HANDLE;
@@ -96,9 +99,6 @@ private:
     VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
     VkPipeline graphicsPipeline = VK_NULL_HANDLE;
     VkCommandPool commandPool = VK_NULL_HANDLE;
-    VkImage colorImage = VK_NULL_HANDLE;
-    VkDeviceMemory colorImageMemory = VK_NULL_HANDLE;
-    VkImageView colorImageView = VK_NULL_HANDLE;
     VkImage depthImage = VK_NULL_HANDLE;
     VkDeviceMemory depthImageMemory = VK_NULL_HANDLE;
     VkImageView depthImageView = VK_NULL_HANDLE;
@@ -127,8 +127,11 @@ private:
 
     // Touch input state
     bool isDragging = false;
-    float lastTouchX = 0.0f;
-    float lastTouchY = 0.0f;
+    float touchStartX = 0.0f;
+    float touchStartY = 0.0f;
+    float currentTouchX = 0.0f;
+    float currentTouchY = 0.0f;
+    glm::quat rotationAtTouchStart = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
     glm::quat currentRotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
     glm::quat targetRotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
 
@@ -148,7 +151,6 @@ private:
     void createGraphicsPipeline();
     void createFramebuffers();
     void createCommandPool();
-    void createColorResources();
     void createDepthResources();
     void createTextureImage();
     void createTextureImageView();

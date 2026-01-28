@@ -12,6 +12,8 @@ build/
 *.aab
 /captures
 
+#VSCODE
+.vscode
 # NDK / CMake
 .cxx/
 .externalNativeBuild/
@@ -32,3 +34,8 @@ Thumbs.db
 
 # Log files
 *.log
+
+# Keystore/release files
+app/release
+*.jks
+*.keystore
