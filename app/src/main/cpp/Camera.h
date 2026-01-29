@@ -61,7 +61,7 @@ class Camera {
                 angle = glm::radians(180.0f);
                 break;
             case DeviceOrientation::Landscape270:
-                angle = glm::radians(270.0f);
+                angle = glm::radians(90.0f);
                 break;
             default:
                 angle = 0.0f;
