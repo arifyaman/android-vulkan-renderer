@@ -1,10 +1,12 @@
 package com.example.myapplication
 
 import android.app.NativeActivity
+import android.os.Build
 import android.os.Bundle
 import android.view.WindowInsets
 import android.view.WindowInsetsController
 import android.view.WindowManager
+import androidx.annotation.RequiresApi
 import androidx.core.view.WindowCompat
 
 class MainActivity : NativeActivity() {
@@ -27,9 +29,12 @@ class MainActivity : NativeActivity() {
         }
 
         // Set high refresh rate immediately after super.onCreate but before surface creation
-        enableHighRefreshRate()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            enableHighRefreshRate()
+        }
     }
 
+    @RequiresApi(Build.VERSION_CODES.R)
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
         // Apply frame rate to the content view's surface
@@ -52,38 +57,42 @@ class MainActivity : NativeActivity() {
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
         if (hasFocus) {
-            hideSystemUi()
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                hideSystemUi()
+            }
         }
     }
 
+    @RequiresApi(Build.VERSION_CODES.R)
     private fun enableHighRefreshRate() {
         // Use preferredDisplayModeId for highest refresh rate (API 30+)
         val currentDisplay = display ?: return
         val supportedModes = currentDisplay.supportedModes
-        
+
         // Log all available modes
         supportedModes.forEach { mode ->
             android.util.Log.d("MainActivity", "Mode ${mode.modeId}: ${mode.refreshRate}Hz (${mode.physicalWidth}x${mode.physicalHeight})")
         }
-        
+
         // Find the mode with highest refresh rate (filter by current resolution first)
         val currentMode = currentDisplay.mode
         val highestRefreshMode = supportedModes
             .filter { it.physicalWidth == currentMode.physicalWidth && it.physicalHeight == currentMode.physicalHeight }
             .maxByOrNull { it.refreshRate }
-        
+
         highestRefreshMode?.let { mode ->
             val params = window.attributes
             params.preferredDisplayModeId = mode.modeId
             params.preferredRefreshRate = mode.refreshRate
             window.attributes = params
-            
+
             android.util.Log.d("MainActivity", "Set refresh rate to ${mode.refreshRate}Hz (mode ${mode.modeId})")
-            
+
             window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         }
     }
 
+    @RequiresApi(Build.VERSION_CODES.R)
     private fun hideSystemUi() {
         // Use WindowCompat to avoid the deprecation warning on window.setDecorFitsSystemWindows.
         // For apps targeting API 35+, edge-to-edge is enforced by default.

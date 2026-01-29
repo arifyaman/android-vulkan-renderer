@@ -21,7 +21,7 @@ High-performance Vulkan renderer for Android using NativeActivity. Renders the c
 - **Android Gradle Plugin (AGP)**: 9.0.0 *(Latest stable)*
 - **Compile SDK**: 36 (Android 16 Preview)
 - **Target SDK**: 36
-- **Min SDK**: 30 (Android 11)
+- **Min SDK**: 24 (Android 7.0)
 - **NDK**: 27+ (bundled with Android Studio)
 - **CMake**: 3.22.1
 - **C++ Standard**: C++17
@@ -110,6 +110,10 @@ Tested on Xiaomi device with Mali GPU (MIUI):
 - **FPS**: 850-1050 sustained
 - **Display**: 120Hz (1220×2712)
 - **Present Mode**: VK_PRESENT_MODE_MAILBOX_KHR
+
+Tested on Xiaomi Redmi Note 4 (API 24):
+- **FPS**: 300 sustained
+- **Configuration**: `useCombinedSPIRV = false`
 
 ## License
 
