@@ -10,6 +10,7 @@ project("myapplication")
 add_library(myapplication SHARED
         main.cpp
         AndroidOut.cpp
+        AndroidHelper.cpp
         VulkanRenderer.cpp)
 
 # Import native_app_glue for NativeActivity support

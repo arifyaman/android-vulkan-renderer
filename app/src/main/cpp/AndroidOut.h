@@ -26,7 +26,9 @@ public:
 
 protected:
     virtual int sync() override {
+#ifndef NDEBUG
         __android_log_print(ANDROID_LOG_DEBUG, logTag_, "%s", str().c_str());
+#endif
         str("");
         return 0;
     }

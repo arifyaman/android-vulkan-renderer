@@ -16,6 +16,8 @@
 #include <glm/gtc/quaternion.hpp>
 #include <glm/gtx/quaternion.hpp>
 
+#include "Camera.h"
+
 struct QueueFamilyIndices {
     std::optional<uint32_t> graphicsFamily;
     std::optional<uint32_t> presentFamily;
@@ -65,6 +67,8 @@ public:
 
     void render();
     void handleTouchInput(float x, float y, bool isDown);
+    void recreateSwapChain();
+    void updateCameraOrientation();
 
 private:
     android_app* app_;
@@ -135,6 +139,9 @@ private:
     glm::quat currentRotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
     glm::quat targetRotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
 
+    // Camera
+    Camera camera;
+
     // Initialization methods
     void initVulkan();
     void createInstance();
@@ -143,7 +150,6 @@ private:
     void pickPhysicalDevice();
     void createLogicalDevice();
     void createSwapChain();
-    void recreateSwapChain();
     void cleanupSwapChain();
     void createImageViews();
     void createRenderPass();

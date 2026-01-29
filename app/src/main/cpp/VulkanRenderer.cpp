@@ -1,5 +1,6 @@
 #include "VulkanRenderer.h"
 #include "AndroidOut.h"
+#include "AndroidHelper.h"
 
 #include <android/asset_manager.h>
 #include <android/native_window.h>
@@ -121,57 +122,56 @@ void VulkanRenderer::render() {
     drawFrame();
 }
 
+void VulkanRenderer::updateCameraOrientation() {
+    // Get actual device orientation from Android
+    DeviceOrientation orientation = AndroidHelper::getDeviceOrientation(app_);
+    
+    camera.setOrientation(orientation);
+    
+    // Update aspect ratio for projection matrix
+    camera.setAspectRatio(static_cast<float>(swapChainExtent.width), 
+                          static_cast<float>(swapChainExtent.height));
+}
+
 void VulkanRenderer::handleTouchInput(float x, float y, bool isDown) {
+    // Get current window dimensions
+    int32_t width = ANativeWindow_getWidth(app_->window);
+    int32_t height = ANativeWindow_getHeight(app_->window);
+    
+    // Normalize to [0, 1] range based on current orientation
+    float normalizedX = x / static_cast<float>(width);
+    float normalizedY = y / static_cast<float>(height);
+    
     if (isDown) {
         if (!isDragging) {
-            // Touch started - save initial state
             isDragging = true;
-            touchStartX = x;
-            touchStartY = y;
-            currentTouchX = x;
-            currentTouchY = y;
+            touchStartX = normalizedX;
+            touchStartY = normalizedY;
             rotationAtTouchStart = currentRotation;
         } else {
-            // Touch dragging - calculate total rotation from start position
-            currentTouchX = x;
-            currentTouchY = y;
+            currentTouchX = normalizedX;
+            currentTouchY = normalizedY;
             
-            // Calculate total drag from touch start
             float totalDeltaX = currentTouchX - touchStartX;
             float totalDeltaY = currentTouchY - touchStartY;
             
-            // Camera-relative rotation (like Blender)
-            // Camera is at (2, 2, 2) looking at (0, 0, 0) with up (0, 0, 1)
-            glm::vec3 cameraPos = glm::vec3(2.0f, 2.0f, 2.0f);
-            glm::vec3 cameraTarget = glm::vec3(0.0f, 0.0f, 0.0f);
-            glm::vec3 worldUp = glm::vec3(0.0f, 0.0f, 1.0f);
+            // Get camera vectors (already calculated based on orientation)
+            glm::vec3 cameraRight = camera.getRight();
+            glm::vec3 cameraUp = camera.getUp();
             
-            // Calculate camera axes
-            glm::vec3 viewDir = glm::normalize(cameraTarget - cameraPos);
-            glm::vec3 cameraRight = glm::normalize(glm::cross(viewDir, worldUp));
-            glm::vec3 cameraUp = glm::normalize(glm::cross(cameraRight, viewDir));
+            float rotationSpeed = 3.0f;
             
-            float rotationSpeed = 0.003f;
-            
-            // Horizontal drag (X) rotates around camera's up axis
             float angleAroundUp = totalDeltaX * rotationSpeed;
-            // Vertical drag (Y) rotates around camera's right axis
             float angleAroundRight = totalDeltaY * rotationSpeed;
             
-            // Create rotation quaternions around camera axes
-            glm::quat rotAroundUp = glm::angleAxis(angleAroundUp, cameraUp);
-            glm::quat rotAroundRight = glm::angleAxis(angleAroundRight, cameraRight);
+            glm::quat rotationAroundUp = glm::angleAxis(angleAroundUp, cameraUp);
+            glm::quat rotationAroundRight = glm::angleAxis(angleAroundRight, cameraRight);
             
-            // Combine rotations (apply in view space)
-            glm::quat deltaRotation = rotAroundUp * rotAroundRight;
-            
-            // Apply rotation in view space (left multiply) to rotation at touch start
+            glm::quat deltaRotation = rotationAroundUp * rotationAroundRight;
             targetRotation = deltaRotation * rotationAtTouchStart;
         }
     } else {
-        // Touch released - finalize rotation
         isDragging = false;
-        // currentRotation will smoothly lerp to targetRotation via updateUniformBuffer
     }
 }
 
@@ -182,6 +182,7 @@ void VulkanRenderer::initVulkan() {
     pickPhysicalDevice();
     createLogicalDevice();
     createSwapChain();
+    updateCameraOrientation();
     createImageViews();
     createRenderPass();
     createDescriptorSetLayout();
@@ -403,14 +404,19 @@ void VulkanRenderer::cleanupSwapChain() {
 }
 
 void VulkanRenderer::recreateSwapChain() {
+    int32_t windowWidth = ANativeWindow_getWidth(app_->window);
+    int32_t windowHeight = ANativeWindow_getHeight(app_->window);
+    aout << "recreateSwapChain - Window: " << windowWidth << "x" << windowHeight << std::endl;
+    
     vkDeviceWaitIdle(device);
-    
     cleanupSwapChain();
-    
     createSwapChain();
+    updateCameraOrientation();
     createImageViews();
     createDepthResources();
     createFramebuffers();
+    
+    aout << "recreateSwapChain - Swapchain extent: " << swapChainExtent.width << "x" << swapChainExtent.height << std::endl;
 }
 
 void VulkanRenderer::createImageViews() {
@@ -1104,6 +1110,14 @@ void VulkanRenderer::recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t
     viewport.maxDepth = 1.0f;
     vkCmdSetViewport(commandBuffer, 0, 1, &viewport);
     
+    // Log viewport changes
+    static uint32_t lastWidth = 0, lastHeight = 0;
+    if (swapChainExtent.width != lastWidth || swapChainExtent.height != lastHeight) {
+        aout << "Viewport set: " << swapChainExtent.width << "x" << swapChainExtent.height << std::endl;
+        lastWidth = swapChainExtent.width;
+        lastHeight = swapChainExtent.height;
+    }
+    
     VkRect2D scissor{};
     scissor.offset = {0, 0};
     scissor.extent = swapChainExtent;
@@ -1140,11 +1154,12 @@ void VulkanRenderer::updateUniformBuffer(uint32_t currentImage) {
     currentRotation = glm::slerp(currentRotation, targetRotation, slerpFactor);
     
     UniformBufferObject ubo{};
-    // Use quaternion rotation instead of auto-rotation
+    // Use quaternion rotation from touch input
     ubo.model = glm::mat4_cast(currentRotation);
-    ubo.view = glm::lookAt(glm::vec3(2.0f, 2.0f, 2.0f), glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
-    ubo.proj = glm::perspective(glm::radians(45.0f), swapChainExtent.width / (float)swapChainExtent.height, 0.1f, 10.0f);
-    ubo.proj[1][1] *= -1;
+    
+    // Get pre-calculated matrices from camera
+    ubo.view = camera.getViewMatrix();
+    ubo.proj = camera.getProjectionMatrix();
     
     memcpy(uniformBuffersMapped[currentImage], &ubo, sizeof(ubo));
 }
