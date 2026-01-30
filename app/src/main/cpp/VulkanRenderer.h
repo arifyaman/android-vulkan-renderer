@@ -72,14 +72,17 @@ public:
 
 private:
     android_app* app_;
-    
+
     static constexpr int MAX_FRAMES_IN_FLIGHT = 2;
     const std::vector<const char*> validationLayers = {"VK_LAYER_KHRONOS_validation"};
-    const std::vector<const char*> deviceExtensions = {VK_KHR_SWAPCHAIN_EXTENSION_NAME};
-    
+    const std::vector<const char*> deviceExtensions = {
+            VK_KHR_SWAPCHAIN_EXTENSION_NAME,
+            VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME
+    };
+
     // Validation layers are not available on Android devices
     const bool enableValidationLayers = false;
-    
+
     // Use combined SPIR-V file (Slang) or separate shader files (GLSL)
     const bool useCombinedSPIRV = true;
 
@@ -97,8 +100,7 @@ private:
     VkFormat swapChainImageFormat;
     VkExtent2D swapChainExtent;
     std::vector<VkImageView> swapChainImageViews;
-    std::vector<VkFramebuffer> swapChainFramebuffers;
-    VkRenderPass renderPass = VK_NULL_HANDLE;
+
     VkDescriptorSetLayout descriptorSetLayout = VK_NULL_HANDLE;
     VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
     VkPipeline graphicsPipeline = VK_NULL_HANDLE;
@@ -142,6 +144,10 @@ private:
     // Camera
     Camera camera;
 
+    // Dynamic rendering function pointers
+    PFN_vkCmdBeginRenderingKHR vkCmdBeginRenderingKHR = nullptr;
+    PFN_vkCmdEndRenderingKHR vkCmdEndRenderingKHR = nullptr;
+
     // Initialization methods
     void initVulkan();
     void createInstance();
@@ -152,10 +158,8 @@ private:
     void createSwapChain();
     void cleanupSwapChain();
     void createImageViews();
-    void createRenderPass();
     void createDescriptorSetLayout();
     void createGraphicsPipeline();
-    void createFramebuffers();
     void createCommandPool();
     void createDepthResources();
     void createTextureImage();
@@ -201,14 +205,14 @@ private:
     uint32_t findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties);
     void generateMipmaps(VkImage image, VkFormat imageFormat, int32_t texWidth, int32_t texHeight, uint32_t mipLevels);
     VkSampleCountFlagBits getMaxUsableSampleCount();
-    
+
     // Asset loading
     std::vector<char> readFile(const std::string& filename);
     static VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(
-        VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
-        VkDebugUtilsMessageTypeFlagsEXT messageType,
-        const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData,
-        void* pUserData);
+            VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
+            VkDebugUtilsMessageTypeFlagsEXT messageType,
+            const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData,
+            void* pUserData);
 };
 
 #endif // VULKANRENDERER_H
