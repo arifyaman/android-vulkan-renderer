@@ -968,11 +968,14 @@ void VulkanRenderer::loadModel() {
     AAsset_read(asset, assetData.data(), assetLength);
     AAsset_close(asset);
 
-    // Find MTL file reference
+    // Find MTL file reference and parse OBJ manually to get material assignments
     std::string mtlFilename;
     std::istringstream objStream(std::string(assetData.begin(), assetData.end()));
     std::string line;
-    while (std::getline(objStream, line)) {
+
+    // First pass: Find MTL file
+    std::istringstream objStream2(std::string(assetData.begin(), assetData.end()));
+    while (std::getline(objStream2, line)) {
         std::istringstream lineStream(line);
         std::string token;
         lineStream >> token;
@@ -987,6 +990,7 @@ void VulkanRenderer::loadModel() {
         parseMTLFile(mtlFilename);
     }
 
+    // Use tinyobj_loader for geometry, then apply materials from usemtl statements
     tinyobj::attrib_t attrib;
     std::vector<tinyobj::shape_t> shapes;
     std::vector<tinyobj::material_t> materials;
@@ -999,97 +1003,114 @@ void VulkanRenderer::loadModel() {
         throw std::runtime_error(err);
     }
 
+    // Parse OBJ file again to find usemtl statements and their positions
+    struct FaceWithMaterial {
+        int v1, v2, v3;
+        int vt1, vt2, vt3;
+        int matId;
+    };
+    std::vector<FaceWithMaterial> faces;
+
+    std::istringstream objStream3(std::string(assetData.begin(), assetData.end()));
+    std::string currentMaterialName = "";
+    int currentMatId = 0;
+
+    aout << "Parsing OBJ for material assignments..." << std::endl;
+
+    while (std::getline(objStream3, line)) {
+        if (line.empty() || line[0] == '#') continue;
+
+        std::istringstream lineStream(line);
+        std::string token;
+        lineStream >> token;
+
+        if (token == "usemtl") {
+            lineStream >> currentMaterialName;
+            // Find texture index for this material
+            if (materialToTextureIndex.find(currentMaterialName) == materialToTextureIndex.end()) {
+                int newIndex = materialToTextureIndex.size();
+                materialToTextureIndex[currentMaterialName] = newIndex;
+                aout << "New material from usemtl: " << currentMaterialName << " -> texture index: " << newIndex << std::endl;
+            }
+            currentMatId = materialToTextureIndex[currentMaterialName];
+        } else if (token == "f") {
+            // Parse face: f v1/vt1/vn1 v2/vt2/vn2 v3/vt3/vn3
+            FaceWithMaterial face;
+            face.matId = currentMatId;
+
+            std::string part;
+            int component = 0;
+
+            while (lineStream >> part && component < 3) {
+                // Parse v/vt/vn
+                std::istringstream partStream(part);
+                std::string indexStr;
+                int v = -1, vt = -1, vn = -1;
+
+                if (std::getline(partStream, indexStr, '/') && !indexStr.empty()) {
+                    v = std::stoi(indexStr);
+                }
+                if (std::getline(partStream, indexStr, '/') && !indexStr.empty()) {
+                    vt = std::stoi(indexStr);
+                }
+                if (std::getline(partStream, indexStr, '/') && !indexStr.empty()) {
+                    vn = std::stoi(indexStr);
+                }
+
+                if (component == 0) { face.v1 = v; face.vt1 = vt; }
+                else if (component == 1) { face.v2 = v; face.vt2 = vt; }
+                else if (component == 2) { face.v3 = v; face.vt3 = vt; }
+
+                component++;
+            }
+
+            // OBJ indices are 1-based, convert to 0-based
+            face.v1--; face.v2--; face.v3--;
+            face.vt1--; face.vt2--; face.vt3--;
+
+            // Only add face if we got valid indices
+            if (face.v1 >= 0 && face.v2 >= 0 && face.v3 >= 0) {
+                faces.push_back(face);
+            }
+        }
+    }
+
+    aout << "Parsed " << faces.size() << " faces with material assignments" << std::endl;
+    aout << "Total materials found: " << materialToTextureIndex.size() << std::endl;
+
     std::unordered_map<Vertex, uint32_t> uniqueVertices{};
-    std::string currentMaterialName;
-    int currentTexIndex = 0;
 
-    aout << "Loading model with " << shapes.size() << " shapes" << std::endl;
+    for (const auto& face : faces) {
+        for (int i = 0; i < 3; i++) {
+            int vi = (i == 0) ? face.v1 : (i == 1 ? face.v2 : face.v3);
+            int vti = (i == 0) ? face.vt1 : (i == 1 ? face.vt2 : face.vt3);
 
-    for (const auto& shape : shapes) {
-        if (!shape.mesh.material_ids.empty()) {
-            // Tinyobj might have per-face material IDs
-            size_t faceIndex = 0;
-            for (size_t i = 0; i < shape.mesh.indices.size(); i += 3) {
-                int matId = shape.mesh.material_ids[faceIndex];
+            Vertex vertex{};
 
-                if (matId >= 0 && matId < materials.size()) {
-                    currentMaterialName = materials[matId].name;
-
-                    // Find texture index for this material
-                    if (materialToTextureIndex.find(currentMaterialName) == materialToTextureIndex.end()) {
-                        // Assign new texture index
-                        int newIndex = materialToTextureIndex.size();
-                        materialToTextureIndex[currentMaterialName] = newIndex;
-                        aout << "New material: " << currentMaterialName << " -> texture index: " << newIndex << std::endl;
-                    }
-                    currentTexIndex = materialToTextureIndex[currentMaterialName];
-                } else {
-                    currentTexIndex = 0;
-                }
-
-                // Process 3 vertices of this face
-                for (size_t j = 0; j < 3 && (i + j) < shape.mesh.indices.size(); j++) {
-                    const auto& index = shape.mesh.indices[i + j];
-                    Vertex vertex{};
-
-                    vertex.pos = {
-                            attrib.vertices[3 * index.vertex_index + 0],
-                            attrib.vertices[3 * index.vertex_index + 1],
-                            attrib.vertices[3 * index.vertex_index + 2]
-                    };
-
-                    vertex.texCoord = {
-                            attrib.texcoords[2 * index.texcoord_index + 0],
-                            1.0f - attrib.texcoords[2 * index.texcoord_index + 1]
-                    };
-
-                    vertex.color = {1.0f, 1.0f, 1.0f};
-                    vertex.texIndex = currentTexIndex;
-
-                    if (uniqueVertices.count(vertex) == 0) {
-                        uniqueVertices[vertex] = static_cast<uint32_t>(vertices.size());
-                        vertices.push_back(vertex);
-                    }
-
-                    indices.push_back(uniqueVertices[vertex]);
-                }
-
-                faceIndex++;
-            }
-        } else {
-            // Fallback: Use one material per shape
-            if (!shape.name.empty()) {
-                // Try to find material from shape name
-                aout << "Shape " << shape.name << " has no material IDs" << std::endl;
-            }
-
-            // Default texture index
-            currentTexIndex = 0;
-
-            for (const auto& index : shape.mesh.indices) {
-                Vertex vertex{};
-
+            if (vi >= 0 && vi * 3 + 2 < attrib.vertices.size()) {
                 vertex.pos = {
-                        attrib.vertices[3 * index.vertex_index + 0],
-                        attrib.vertices[3 * index.vertex_index + 1],
-                        attrib.vertices[3 * index.vertex_index + 2]
+                    attrib.vertices[3 * vi + 0],
+                    attrib.vertices[3 * vi + 1],
+                    attrib.vertices[3 * vi + 2]
                 };
-
-                vertex.texCoord = {
-                        attrib.texcoords[2 * index.texcoord_index + 0],
-                        1.0f - attrib.texcoords[2 * index.texcoord_index + 1]
-                };
-
-                vertex.color = {1.0f, 1.0f, 1.0f};
-                vertex.texIndex = currentTexIndex;
-
-                if (uniqueVertices.count(vertex) == 0) {
-                    uniqueVertices[vertex] = static_cast<uint32_t>(vertices.size());
-                    vertices.push_back(vertex);
-                }
-
-                indices.push_back(uniqueVertices[vertex]);
             }
+
+            if (vti >= 0 && vti * 2 + 1 < attrib.texcoords.size()) {
+                vertex.texCoord = {
+                    attrib.texcoords[2 * vti + 0],
+                    1.0f - attrib.texcoords[2 * vti + 1]
+                };
+            }
+
+            vertex.color = {1.0f, 1.0f, 1.0f};
+            vertex.texIndex = face.matId;
+
+            if (uniqueVertices.count(vertex) == 0) {
+                uniqueVertices[vertex] = static_cast<uint32_t>(vertices.size());
+                vertices.push_back(vertex);
+            }
+
+            indices.push_back(uniqueVertices[vertex]);
         }
     }
 
