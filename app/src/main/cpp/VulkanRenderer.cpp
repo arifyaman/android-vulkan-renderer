@@ -31,8 +31,8 @@ VkVertexInputBindingDescription Vertex::getBindingDescription() {
     return bindingDescription;
 }
 
-std::array<VkVertexInputAttributeDescription, 3> Vertex::getAttributeDescriptions() {
-    std::array<VkVertexInputAttributeDescription, 3> attributeDescriptions{};
+std::array<VkVertexInputAttributeDescription, 4> Vertex::getAttributeDescriptions() {
+    std::array<VkVertexInputAttributeDescription, 4> attributeDescriptions{};
 
     attributeDescriptions[0].binding = 0;
     attributeDescriptions[0].location = 0;
@@ -48,6 +48,11 @@ std::array<VkVertexInputAttributeDescription, 3> Vertex::getAttributeDescription
     attributeDescriptions[2].location = 2;
     attributeDescriptions[2].format = VK_FORMAT_R32G32_SFLOAT;
     attributeDescriptions[2].offset = offsetof(Vertex, texCoord);
+
+    attributeDescriptions[3].binding = 0;
+    attributeDescriptions[3].location = 3;
+    attributeDescriptions[3].format = VK_FORMAT_R32_SINT;
+    attributeDescriptions[3].offset = offsetof(Vertex, texIndex);
 
     return attributeDescriptions;
 }
@@ -72,10 +77,18 @@ VulkanRenderer::~VulkanRenderer() {
 
         cleanupSwapChain();
 
-        if (textureSampler != VK_NULL_HANDLE) vkDestroySampler(device, textureSampler, nullptr);
-        if (textureImageView != VK_NULL_HANDLE) vkDestroyImageView(device, textureImageView, nullptr);
-        if (textureImage != VK_NULL_HANDLE) vkDestroyImage(device, textureImage, nullptr);
-        if (textureImageMemory != VK_NULL_HANDLE) vkFreeMemory(device, textureImageMemory, nullptr);
+        for (size_t i = 0; i < textureSamplers.size(); i++) {
+            if (textureSamplers[i] != VK_NULL_HANDLE) vkDestroySampler(device, textureSamplers[i], nullptr);
+        }
+        for (size_t i = 0; i < textureImageViews.size(); i++) {
+            if (textureImageViews[i] != VK_NULL_HANDLE) vkDestroyImageView(device, textureImageViews[i], nullptr);
+        }
+        for (size_t i = 0; i < textureImages.size(); i++) {
+            if (textureImages[i] != VK_NULL_HANDLE) vkDestroyImage(device, textureImages[i], nullptr);
+        }
+        for (size_t i = 0; i < textureImageMemories.size(); i++) {
+            if (textureImageMemories[i] != VK_NULL_HANDLE) vkFreeMemory(device, textureImageMemories[i], nullptr);
+        }
 
         if (depthImageView != VK_NULL_HANDLE) vkDestroyImageView(device, depthImageView, nullptr);
         if (depthImage != VK_NULL_HANDLE) vkDestroyImage(device, depthImage, nullptr);
@@ -201,10 +214,8 @@ void VulkanRenderer::initVulkan() {
     createGraphicsPipeline();  // Now creates dynamic rendering pipeline
     createCommandPool();
     createDepthResources();
-    createTextureImage();
-    createTextureImageView();
-    createTextureSampler();
-    loadModel();
+    loadModel();  // Load model and parse MTL file
+    createTextures();  // Load all textures, create views and samplers
     createVertexBuffer();
     createIndexBuffer();
     createUniformBuffers();
@@ -219,19 +230,70 @@ void VulkanRenderer::createInstance() {
         throw std::runtime_error("validation layers requested, but not available!");
     }
 
+    // Query and print Vulkan API version
+    uint32_t apiVersion = VK_API_VERSION_1_0;
+    auto vkEnumerateInstanceVersionPtr =
+        (PFN_vkEnumerateInstanceVersion)vkGetInstanceProcAddr(nullptr, "vkEnumerateInstanceVersion");
+
+    if (vkEnumerateInstanceVersionPtr) {
+        vkEnumerateInstanceVersionPtr(&apiVersion);
+    }
+
+    uint32_t major = VK_VERSION_MAJOR(apiVersion);
+    uint32_t minor = VK_VERSION_MINOR(apiVersion);
+    uint32_t patch = VK_VERSION_PATCH(apiVersion);
+
+    aout << "Vulkan API version available: " << major << "." << minor << "." << patch << std::endl;
+
+    uint32_t requiredVersion = VK_API_VERSION_1_2;
+    if (apiVersion < requiredVersion) {
+        aout << "Error: Vulkan " << major << "." << minor << "." << patch
+             << " is not supported. Required: Vulkan 1.2+" << std::endl;
+        throw std::runtime_error("Vulkan 1.2 or higher is required for dynamic rendering!");
+    }
+
     VkApplicationInfo appInfo{};
     appInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
     appInfo.pApplicationName = "Vulkan Android App";
     appInfo.applicationVersion = VK_MAKE_VERSION(1, 0, 0);
     appInfo.pEngineName = "No Engine";
     appInfo.engineVersion = VK_MAKE_VERSION(1, 0, 0);
-    appInfo.apiVersion = VK_API_VERSION_1_2;  // Dynamic rendering requires Vulkan 1.2+
+    appInfo.apiVersion = requiredVersion;  // Dynamic rendering requires Vulkan 1.2+
+
+    // Query and print available instance extensions
+    uint32_t availableExtensionCount = 0;
+    vkEnumerateInstanceExtensionProperties(nullptr, &availableExtensionCount, nullptr);
+    std::vector<VkExtensionProperties> availableExtensions(availableExtensionCount);
+    vkEnumerateInstanceExtensionProperties(nullptr, &availableExtensionCount, availableExtensions.data());
+
+    aout << "Available Vulkan instance extensions (" << availableExtensionCount << "):" << std::endl;
+    for (const auto& extension : availableExtensions) {
+        aout << "  - " << extension.extensionName << " (spec version: " << extension.specVersion << ")" << std::endl;
+    }
 
     VkInstanceCreateInfo createInfo{};
     createInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
     createInfo.pApplicationInfo = &appInfo;
 
     auto extensions = getRequiredExtensions();
+    aout << "\nRequired instance extensions (" << extensions.size() << "):" << std::endl;
+    for (const auto& ext : extensions) {
+        aout << "  - " << ext;
+        bool found = false;
+        for (const auto& available : availableExtensions) {
+            if (strcmp(ext, available.extensionName) == 0) {
+                found = true;
+                aout << " [AVAILABLE]";
+                break;
+            }
+        }
+        if (!found) {
+            aout << " [NOT AVAILABLE - ERROR!]";
+            throw std::runtime_error(std::string("Required extension not available: ") + ext);
+        }
+        aout << std::endl;
+    }
+
     createInfo.enabledExtensionCount = static_cast<uint32_t>(extensions.size());
     createInfo.ppEnabledExtensionNames = extensions.data();
 
@@ -304,6 +366,35 @@ void VulkanRenderer::pickPhysicalDevice() {
 
 void VulkanRenderer::createLogicalDevice() {
     QueueFamilyIndices indices = findQueueFamilies(physicalDevice);
+
+    // Query and print available device extensions
+    uint32_t availableExtensionCount = 0;
+    vkEnumerateDeviceExtensionProperties(physicalDevice, nullptr, &availableExtensionCount, nullptr);
+    std::vector<VkExtensionProperties> availableExtensions(availableExtensionCount);
+    vkEnumerateDeviceExtensionProperties(physicalDevice, nullptr, &availableExtensionCount, availableExtensions.data());
+
+    aout << "\nAvailable Vulkan device extensions (" << availableExtensionCount << "):" << std::endl;
+    for (const auto& extension : availableExtensions) {
+        aout << "  - " << extension.extensionName << " (spec version: " << extension.specVersion << ")" << std::endl;
+    }
+
+    aout << "\nRequired device extensions (" << deviceExtensions.size() << "):" << std::endl;
+    for (const auto& ext : deviceExtensions) {
+        aout << "  - " << ext;
+        bool found = false;
+        for (const auto& available : availableExtensions) {
+            if (strcmp(ext, available.extensionName) == 0) {
+                found = true;
+                aout << " [AVAILABLE]";
+                break;
+            }
+        }
+        if (!found) {
+            aout << " [NOT AVAILABLE - ERROR!]";
+            throw std::runtime_error(std::string("Required device extension not available: ") + ext);
+        }
+        aout << std::endl;
+    }
 
     std::vector<VkDeviceQueueCreateInfo> queueCreateInfos;
     std::set<uint32_t> uniqueQueueFamilies = {indices.graphicsFamily.value(), indices.presentFamily.value()};
@@ -449,7 +540,7 @@ void VulkanRenderer::createDescriptorSetLayout() {
 
     VkDescriptorSetLayoutBinding samplerLayoutBinding{};
     samplerLayoutBinding.binding = 1;
-    samplerLayoutBinding.descriptorCount = 1;
+    samplerLayoutBinding.descriptorCount = MAX_PHASE_1_TEXTURES;
     samplerLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     samplerLayoutBinding.pImmutableSamplers = nullptr;
     samplerLayoutBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
@@ -639,12 +730,13 @@ void VulkanRenderer::createDepthResources() {
     depthImageView = createImageView(depthImage, depthFormat, aspectFlags, 1);
 }
 
-void VulkanRenderer::createTextureImage() {
+void VulkanRenderer::loadSingleTexture(const std::string& filename, int textureIndex) {
     auto assetManager = app_->activity->assetManager;
 
-    AAsset* asset = AAssetManager_open(assetManager, "viking_room.png", AASSET_MODE_STREAMING);
+    AAsset* asset = AAssetManager_open(assetManager, filename.c_str(), AASSET_MODE_STREAMING);
     if (!asset) {
-        throw std::runtime_error("failed to open texture asset!");
+        aout << "Warning: Could not open texture file: " << filename << std::endl;
+        return;
     }
 
     size_t assetLength = AAsset_getLength(asset);
@@ -655,13 +747,14 @@ void VulkanRenderer::createTextureImage() {
     int texWidth, texHeight, texChannels;
     stbi_uc* pixels = stbi_load_from_memory(assetData.data(), assetLength, &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
     VkDeviceSize imageSize = texWidth * texHeight * 4;
-    // Disable mipmaps for better performance on mobile
-    mipLevels = 1;
-    aout << "Mipmaps disabled for mobile performance" << std::endl;
 
     if (!pixels) {
-        throw std::runtime_error("failed to load texture image!");
+        aout << "Warning: Failed to load texture: " << filename << std::endl;
+        return;
     }
+
+    aout << "Loading texture [" << textureIndex << "]: " << filename
+         << " (" << texWidth << "x" << texHeight << ")" << std::endl;
 
     VkBuffer stagingBuffer;
     VkDeviceMemory stagingBufferMemory;
@@ -676,23 +769,106 @@ void VulkanRenderer::createTextureImage() {
 
     stbi_image_free(pixels);
 
-    createImage(texWidth, texHeight, mipLevels, VK_SAMPLE_COUNT_1_BIT, VK_FORMAT_R8G8B8A8_SRGB,
+    VkImage image;
+    VkDeviceMemory imageMemory;
+
+    createImage(texWidth, texHeight, 1, VK_SAMPLE_COUNT_1_BIT, VK_FORMAT_R8G8B8A8_SRGB,
                 VK_IMAGE_TILING_OPTIMAL,
                 VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, textureImage, textureImageMemory);
+                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, image, imageMemory);
 
-    transitionImageLayout(textureImage, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_LAYOUT_UNDEFINED,
-                          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, mipLevels);
-    copyBufferToImage(stagingBuffer, textureImage, static_cast<uint32_t>(texWidth), static_cast<uint32_t>(texHeight));
+    transitionImageLayout(image, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_LAYOUT_UNDEFINED,
+                          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1);
+    copyBufferToImage(stagingBuffer, image, static_cast<uint32_t>(texWidth), static_cast<uint32_t>(texHeight));
 
     vkDestroyBuffer(device, stagingBuffer, nullptr);
     vkFreeMemory(device, stagingBufferMemory, nullptr);
 
-    generateMipmaps(textureImage, VK_FORMAT_R8G8B8A8_SRGB, texWidth, texHeight, mipLevels);
+    transitionImageLayout(image, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, 1);
+
+    textureImages.push_back(image);
+    textureImageMemories.push_back(imageMemory);
 }
 
-void VulkanRenderer::createTextureImageView() {
-    textureImageView = createImageView(textureImage, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_ASPECT_COLOR_BIT, mipLevels);
+void VulkanRenderer::createTextures() {
+    aout << "Creating textures for " << materialToTextureFile.size() << " materials" << std::endl;
+
+    // Get all unique texture filenames from materials
+    std::set<std::string> textureFilenames;
+    for (const auto& pair : materialToTextureFile) {
+        textureFilenames.insert(pair.second);
+        aout << "Material " << pair.first << " -> " << pair.second << std::endl;
+    }
+
+    // For Phase 1, ensure we don't exceed MAX_PHASE_1_TEXTURES
+    if (textureFilenames.size() > MAX_PHASE_1_TEXTURES) {
+        throw std::runtime_error("Too many textures for Phase 1! Use Phase 2 (Bindless) for 100+ textures.");
+    }
+
+    aout << "Total unique textures to load: " << textureFilenames.size() << std::endl;
+
+    // Load all textures
+    int index = 0;
+    for (const auto& filename : textureFilenames) {
+        loadSingleTexture(filename, index);
+        index++;
+    }
+
+    numTextures = index;
+    aout << "Loaded " << numTextures << " texture images" << std::endl;
+
+    // Create image views
+    for (size_t i = 0; i < textureImages.size(); i++) {
+        textureImageViews.push_back(createImageView(textureImages[i], VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_ASPECT_COLOR_BIT, 1));
+    }
+    aout << "Created " << textureImageViews.size() << " texture image views" << std::endl;
+
+    // Create samplers (one per texture for Phase 1)
+    VkPhysicalDeviceProperties properties{};
+    vkGetPhysicalDeviceProperties(physicalDevice, &properties);
+
+    VkSamplerCreateInfo samplerInfo{};
+    samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    samplerInfo.magFilter = VK_FILTER_LINEAR;
+    samplerInfo.minFilter = VK_FILTER_LINEAR;
+    samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    samplerInfo.anisotropyEnable = VK_TRUE;
+    samplerInfo.maxAnisotropy = properties.limits.maxSamplerAnisotropy;
+    samplerInfo.borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK;
+    samplerInfo.unnormalizedCoordinates = VK_FALSE;
+    samplerInfo.compareEnable = VK_FALSE;
+    samplerInfo.compareOp = VK_COMPARE_OP_ALWAYS;
+    samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+    samplerInfo.minLod = 0.0f;
+    samplerInfo.maxLod = 1.0f;
+    samplerInfo.mipLodBias = 0.0f;
+
+    for (size_t i = 0; i < numTextures; i++) {
+        VkSampler sampler;
+        if (vkCreateSampler(device, &samplerInfo, nullptr, &sampler) != VK_SUCCESS) {
+            throw std::runtime_error("failed to create texture sampler!");
+        }
+        textureSamplers.push_back(sampler);
+    }
+    aout << "Created " << textureSamplers.size() << " texture samplers" << std::endl;
+}
+
+void VulkanRenderer::createTextureImages() {
+    // Phase 1: Handled in createTextures()
+    // Phase 2 (Bindless): Will have separate texture loading
+}
+
+void VulkanRenderer::createTextureImageViews() {
+    // Phase 1: Handled in createTextures()
+    // Phase 2 (Bindless): Will have separate view creation
+}
+
+void VulkanRenderer::createTextureSamplers() {
+    // Phase 1: Handled in createTextures()
+    // Phase 2 (Bindless): Will use single sampler with multiple textures
 }
 
 void VulkanRenderer::createTextureSampler() {
@@ -722,10 +898,94 @@ void VulkanRenderer::createTextureSampler() {
     }
 }
 
+void VulkanRenderer::parseMTLFile(const std::string& mtlFilename) {
+    auto assetManager = app_->activity->assetManager;
+
+    AAsset* asset = AAssetManager_open(assetManager, mtlFilename.c_str(), AASSET_MODE_STREAMING);
+    if (!asset) {
+        aout << "Warning: Could not open MTL file: " << mtlFilename << std::endl;
+        return;
+    }
+
+    size_t assetLength = AAsset_getLength(asset);
+    std::string mtlData(assetLength, '\0');
+    AAsset_read(asset, mtlData.data(), assetLength);
+    AAsset_close(asset);
+
+    std::istringstream stream(mtlData);
+    std::string line;
+    std::string currentMaterial;
+
+    aout << "Parsing MTL file: " << mtlFilename << std::endl;
+
+    while (std::getline(stream, line)) {
+        std::istringstream lineStream(line);
+        std::string token;
+        lineStream >> token;
+
+        if (token == "newmtl") {
+            lineStream >> currentMaterial;
+            aout << "Found material: " << currentMaterial << std::endl;
+        } else if (token == "map_Kd" || token == "map_Ka") {
+            std::string textureFile;
+            lineStream >> textureFile;
+
+            // Material might not have explicit texture in MTL, infer from naming
+            if (textureFile.empty()) {
+                // Try to infer texture name from material name
+                // Material: "lambert5SG.001" -> "lambert5SG_baseColor.png"
+                std::string inferredTexture = currentMaterial;
+
+                // Remove .001 suffix if present
+                size_t dotPos = currentMaterial.find('.');
+                if (dotPos != std::string::npos) {
+                    inferredTexture = currentMaterial.substr(0, dotPos);
+                }
+
+                inferredTexture += "_baseColor.png";
+                materialToTextureFile[currentMaterial] = inferredTexture;
+                aout << "No explicit texture for " << currentMaterial << ", inferred: " << inferredTexture << std::endl;
+            } else {
+                materialToTextureFile[currentMaterial] = textureFile;
+                aout << "Material " << currentMaterial << " -> texture: " << textureFile << std::endl;
+            }
+        }
+    }
+
+    // Also check if materials without explicit textures should try inferred names
+    // First scan all materials in the MTL
+    stream.clear();
+    stream.seekg(0);
+    std::set<std::string> allMaterials;
+    while (std::getline(stream, line)) {
+        std::istringstream lineStream(line);
+        std::string token;
+        lineStream >> token;
+        if (token == "newmtl") {
+            lineStream >> currentMaterial;
+            allMaterials.insert(currentMaterial);
+        }
+    }
+
+    // For materials without texture reference, try inferred names
+    for (const auto& material : allMaterials) {
+        if (materialToTextureFile.find(material) == materialToTextureFile.end()) {
+            std::string inferredTexture = material;
+            size_t dotPos = material.find('.');
+            if (dotPos != std::string::npos) {
+                inferredTexture = material.substr(0, dotPos);
+            }
+            inferredTexture += "_baseColor.png";
+            materialToTextureFile[material] = inferredTexture;
+            aout << "Inferred texture for " << material << ": " << inferredTexture << std::endl;
+        }
+    }
+}
+
 void VulkanRenderer::loadModel() {
     auto assetManager = app_->activity->assetManager;
 
-    AAsset* asset = AAssetManager_open(assetManager, "viking_room.obj", AASSET_MODE_STREAMING);
+    AAsset* asset = AAssetManager_open(assetManager, "AGirl.obj", AASSET_MODE_STREAMING);
     if (!asset) {
         throw std::runtime_error("failed to open model asset!");
     }
@@ -735,43 +995,133 @@ void VulkanRenderer::loadModel() {
     AAsset_read(asset, assetData.data(), assetLength);
     AAsset_close(asset);
 
+    // Find MTL file reference
+    std::string mtlFilename;
+    std::istringstream objStream(std::string(assetData.begin(), assetData.end()));
+    std::string line;
+    while (std::getline(objStream, line)) {
+        std::istringstream lineStream(line);
+        std::string token;
+        lineStream >> token;
+        if (token == "mtllib") {
+            lineStream >> mtlFilename;
+            break;
+        }
+    }
+
+    // Parse MTL file to get material-to-texture mapping
+    if (!mtlFilename.empty()) {
+        parseMTLFile(mtlFilename);
+    }
+
     tinyobj::attrib_t attrib;
     std::vector<tinyobj::shape_t> shapes;
     std::vector<tinyobj::material_t> materials;
     std::string err;
 
-    std::istringstream stream(std::string(assetData.begin(), assetData.end()));
-    if (!tinyobj::LoadObj(&attrib, &shapes, &materials, &err, &stream, nullptr)) {
+    objStream.clear();
+    objStream.seekg(0);
+
+    if (!tinyobj::LoadObj(&attrib, &shapes, &materials, &err, &objStream, nullptr)) {
         throw std::runtime_error(err);
     }
 
     std::unordered_map<Vertex, uint32_t> uniqueVertices{};
+    std::string currentMaterialName;
+    int currentTexIndex = 0;
+
+    aout << "Loading model with " << shapes.size() << " shapes" << std::endl;
 
     for (const auto& shape : shapes) {
-        for (const auto& index : shape.mesh.indices) {
-            Vertex vertex{};
+        if (!shape.mesh.material_ids.empty()) {
+            // Tinyobj might have per-face material IDs
+            size_t faceIndex = 0;
+            for (size_t i = 0; i < shape.mesh.indices.size(); i += 3) {
+                int matId = shape.mesh.material_ids[faceIndex]);
 
-            vertex.pos = {
-                    attrib.vertices[3 * index.vertex_index + 0],
-                    attrib.vertices[3 * index.vertex_index + 1],
-                    attrib.vertices[3 * index.vertex_index + 2]
-            };
+                if (matId >= 0 && matId < materials.size()) {
+                    currentMaterialName = materials[matId].name;
 
-            vertex.texCoord = {
-                    attrib.texcoords[2 * index.texcoord_index + 0],
-                    1.0f - attrib.texcoords[2 * index.texcoord_index + 1]
-            };
+                    // Find texture index for this material
+                    if (materialToTextureIndex.find(currentMaterialName) == materialToTextureIndex.end()) {
+                        // Assign new texture index
+                        int newIndex = materialToTextureIndex.size();
+                        materialToTextureIndex[currentMaterialName] = newIndex;
+                        aout << "New material: " << currentMaterialName << " -> texture index: " << newIndex << std::endl;
+                    }
+                    currentTexIndex = materialToTextureIndex[currentMaterialName];
+                } else {
+                    currentTexIndex = 0;
+                }
 
-            vertex.color = {1.0f, 1.0f, 1.0f};
+                // Process 3 vertices of this face
+                for (size_t j = 0; j < 3 && (i + j) < shape.mesh.indices.size(); j++) {
+                    const auto& index = shape.mesh.indices[i + j];
+                    Vertex vertex{};
 
-            if (uniqueVertices.count(vertex) == 0) {
-                uniqueVertices[vertex] = static_cast<uint32_t>(vertices.size());
-                vertices.push_back(vertex);
+                    vertex.pos = {
+                            attrib.vertices[3 * index.vertex_index + 0],
+                            attrib.vertices[3 * index.vertex_index + 1],
+                            attrib.vertices[3 * index.vertex_index + 2]
+                    };
+
+                    vertex.texCoord = {
+                            attrib.texcoords[2 * index.texcoord_index + 0],
+                            1.0f - attrib.texcoords[2 * index.texcoord_index + 1]
+                    };
+
+                    vertex.color = {1.0f, 1.0f, 1.0f};
+                    vertex.texIndex = currentTexIndex;
+
+                    if (uniqueVertices.count(vertex) == 0) {
+                        uniqueVertices[vertex] = static_cast<uint32_t>(vertices.size());
+                        vertices.push_back(vertex);
+                    }
+
+                    indices.push_back(uniqueVertices[vertex]);
+                }
+
+                faceIndex++;
+            }
+        } else {
+            // Fallback: Use one material per shape
+            if (!shape.name.empty()) {
+                // Try to find material from shape name
+                aout << "Shape " << shape.name << " has no material IDs" << std::endl;
             }
 
-            indices.push_back(uniqueVertices[vertex]);
+            // Default texture index
+            currentTexIndex = 0;
+
+            for (const auto& index : shape.mesh.indices) {
+                Vertex vertex{};
+
+                vertex.pos = {
+                        attrib.vertices[3 * index.vertex_index + 0],
+                        attrib.vertices[3 * index.vertex_index + 1],
+                        attrib.vertices[3 * index.vertex_index + 2]
+                };
+
+                vertex.texCoord = {
+                        attrib.texcoords[2 * index.texcoord_index + 0],
+                        1.0f - attrib.texcoords[2 * index.texcoord_index + 1]
+                };
+
+                vertex.color = {1.0f, 1.0f, 1.0f};
+                vertex.texIndex = currentTexIndex;
+
+                if (uniqueVertices.count(vertex) == 0) {
+                    uniqueVertices[vertex] = static_cast<uint32_t>(vertices.size());
+                    vertices.push_back(vertex);
+                }
+
+                indices.push_back(uniqueVertices[vertex]);
+            }
         }
     }
+
+    aout << "Loaded " << vertices.size() << " vertices, " << indices.size() << " indices" << std::endl;
+    aout << "Total materials: " << materialToTextureIndex.size() << std::endl;
 }
 
 void VulkanRenderer::createVertexBuffer() {
@@ -837,11 +1187,13 @@ void VulkanRenderer::createUniformBuffers() {
 }
 
 void VulkanRenderer::createDescriptorPool() {
+    // Phase 1: Allocate for MAX_PHASE_1_TEXTURES textures
+    // Phase 2 (Bindless): Will need much larger pool
     std::array<VkDescriptorPoolSize, 2> poolSizes{};
     poolSizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     poolSizes[0].descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
     poolSizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    poolSizes[1].descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
+    poolSizes[1].descriptorCount = static_cast<uint32_t>(MAX_PHASE_1_TEXTURES * MAX_FRAMES_IN_FLIGHT);
 
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -852,6 +1204,7 @@ void VulkanRenderer::createDescriptorPool() {
     if (vkCreateDescriptorPool(device, &poolInfo, nullptr, &descriptorPool) != VK_SUCCESS) {
         throw std::runtime_error("failed to create descriptor pool!");
     }
+    aout << "Created descriptor pool with capacity for " << MAX_PHASE_1_TEXTURES << " textures" << std::endl;
 }
 
 void VulkanRenderer::createDescriptorSets() {
@@ -873,31 +1226,41 @@ void VulkanRenderer::createDescriptorSets() {
         bufferInfo.offset = 0;
         bufferInfo.range = sizeof(UniformBufferObject);
 
-        VkDescriptorImageInfo imageInfo{};
-        imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        imageInfo.imageView = textureImageView;
-        imageInfo.sampler = textureSampler;
+        std::vector<VkDescriptorImageInfo> textureInfos;
 
-        std::array<VkWriteDescriptorSet, 2> descriptorWrites{};
+        for (size_t t = 0; t < numTextures && t < MAX_PHASE_1_TEXTURES; t++) {
+            VkDescriptorImageInfo imageInfo{};
+            imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            imageInfo.imageView = textureImageViews[t];
+            imageInfo.sampler = textureSamplers[t];
+            textureInfos.push_back(imageInfo);
+        }
 
-        descriptorWrites[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        descriptorWrites[0].dstSet = descriptorSets[i];
-        descriptorWrites[0].dstBinding = 0;
-        descriptorWrites[0].dstArrayElement = 0;
-        descriptorWrites[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-        descriptorWrites[0].descriptorCount = 1;
-        descriptorWrites[0].pBufferInfo = &bufferInfo;
+        std::vector<VkWriteDescriptorSet> descriptorWrites;
 
-        descriptorWrites[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        descriptorWrites[1].dstSet = descriptorSets[i];
-        descriptorWrites[1].dstBinding = 1;
-        descriptorWrites[1].dstArrayElement = 0;
-        descriptorWrites[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        descriptorWrites[1].descriptorCount = 1;
-        descriptorWrites[1].pImageInfo = &imageInfo;
+        VkWriteDescriptorSet uboWrite{};
+        uboWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        uboWrite.dstSet = descriptorSets[i];
+        uboWrite.dstBinding = 0;
+        uboWrite.dstArrayElement = 0;
+        uboWrite.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        uboWrite.descriptorCount = 1;
+        uboWrite.pBufferInfo = &bufferInfo;
+        descriptorWrites.push_back(uboWrite);
+
+        VkWriteDescriptorSet textureWrite{};
+        textureWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        textureWrite.dstSet = descriptorSets[i];
+        textureWrite.dstBinding = 1;
+        textureWrite.dstArrayElement = 0;
+        textureWrite.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        textureWrite.descriptorCount = static_cast<uint32_t>(textureInfos.size());
+        textureWrite.pImageInfo = textureInfos.data();
+        descriptorWrites.push_back(textureWrite);
 
         vkUpdateDescriptorSets(device, static_cast<uint32_t>(descriptorWrites.size()), descriptorWrites.data(), 0, nullptr);
     }
+    aout << "Created descriptor sets with " << numTextures << " textures" << std::endl;
 }
 
 void VulkanRenderer::createCommandBuffers() {

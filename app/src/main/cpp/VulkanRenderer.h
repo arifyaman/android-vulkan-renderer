@@ -6,6 +6,7 @@
 #include <vector>
 #include <optional>
 #include <array>
+#include <unordered_map>
 
 #define GLM_FORCE_RADIANS
 #define GLM_FORCE_DEPTH_ZERO_TO_ONE
@@ -37,19 +38,22 @@ struct Vertex {
     glm::vec3 pos;
     glm::vec3 color;
     glm::vec2 texCoord;
+    int texIndex;
 
     static VkVertexInputBindingDescription getBindingDescription();
-    static std::array<VkVertexInputAttributeDescription, 3> getAttributeDescriptions();
+    static std::array<VkVertexInputAttributeDescription, 4> getAttributeDescriptions();
 
     bool operator==(const Vertex& other) const {
-        return pos == other.pos && color == other.color && texCoord == other.texCoord;
+        return pos == other.pos && color == other.color && texCoord == other.texCoord && texIndex == other.texIndex;
     }
 };
 
 namespace std {
     template<> struct hash<Vertex> {
         size_t operator()(Vertex const& vertex) const {
-            return ((hash<glm::vec3>()(vertex.pos) ^ (hash<glm::vec3>()(vertex.color) << 1)) >> 1) ^ (hash<glm::vec2>()(vertex.texCoord) << 1);
+            return ((hash<glm::vec3>()(vertex.pos) ^ (hash<glm::vec3>()(vertex.color) << 1)) >> 1) ^
+                  (hash<glm::vec2>()(vertex.texCoord) << 1) ^
+                  (std::hash<int>()(vertex.texIndex) << 2);
         }
     };
 }
@@ -86,6 +90,20 @@ private:
     // Use combined SPIR-V file (Slang) or separate shader files (GLSL)
     const bool useCombinedSPIRV = true;
 
+    // Texture management strategy
+    enum class TexturePhase {
+        PHASE_1_TEXTURE_ARRAY,  // Current: Multiple texture bindings with indices (3-16 textures)
+        PHASE_2_BINDLESS        // Future: Descriptor indexing for 1000+ textures
+    };
+    TexturePhase texturePhase = TexturePhase::PHASE_1_TEXTURE_ARRAY;
+
+    static constexpr int MAX_PHASE_1_TEXTURES = 16;  // Reasonable limit for mobile
+    static constexpr int MAX_PHASE_2_TEXTURES = 65536;  // Bindless limit
+
+    // Material to texture mapping
+    std::unordered_map<std::string, int> materialToTextureIndex;
+    std::unordered_map<std::string, std::string> materialToTextureFile;
+
     // Vulkan objects
     VkInstance instance = VK_NULL_HANDLE;
     VkDebugUtilsMessengerEXT debugMessenger = VK_NULL_HANDLE;
@@ -109,10 +127,14 @@ private:
     VkDeviceMemory depthImageMemory = VK_NULL_HANDLE;
     VkImageView depthImageView = VK_NULL_HANDLE;
     uint32_t mipLevels;
-    VkImage textureImage = VK_NULL_HANDLE;
-    VkDeviceMemory textureImageMemory = VK_NULL_HANDLE;
-    VkImageView textureImageView = VK_NULL_HANDLE;
-    VkSampler textureSampler = VK_NULL_HANDLE;
+
+    // Multi-texture support (Phase 1: Texture Array, Phase 2: Bindless)
+    std::vector<VkImage> textureImages;
+    std::vector<VkDeviceMemory> textureImageMemories;
+    std::vector<VkImageView> textureImageViews;
+    std::vector<VkSampler> textureSamplers;
+    int numTextures = 0;
+
     std::vector<Vertex> vertices;
     std::vector<uint32_t> indices;
     VkBuffer vertexBuffer = VK_NULL_HANDLE;
@@ -162,9 +184,11 @@ private:
     void createGraphicsPipeline();
     void createCommandPool();
     void createDepthResources();
-    void createTextureImage();
-    void createTextureImageView();
-    void createTextureSampler();
+    void createTextures();
+    void createTextureImages();
+    void createTextureImageViews();
+    void createTextureSamplers();
+    void parseMTLFile(const std::string& mtlFilename);
     void loadModel();
     void createVertexBuffer();
     void createIndexBuffer();
@@ -174,6 +198,8 @@ private:
     void createCommandBuffers();
     void createSyncObjects();
 
+    // Texture helper
+    void loadSingleTexture(const std::string& filename, int textureIndex);
     // Helper methods
     void drawFrame();
     void recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIndex);
