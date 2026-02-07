@@ -1,6 +1,5 @@
 #include "VulkanRenderer.h"
 #include "AndroidOut.h"
-#include "AndroidHelper.h"
 
 #include <android/asset_manager.h>
 #include <android/native_window.h>
@@ -141,14 +140,28 @@ void VulkanRenderer::render() {
 }
 
 void VulkanRenderer::updateCameraOrientation() {
-    // Get actual device orientation from Android
-    DeviceOrientation orientation = AndroidHelper::getDeviceOrientation(app_);
+    // Convert Vulkan currentTransform to device orientation
+    DeviceOrientation orientation = currentTransformToOrientation(currentTransform);
 
     camera.setOrientation(orientation);
 
     // Update aspect ratio for projection matrix
     camera.setAspectRatio(static_cast<float>(swapChainExtent.width),
                           static_cast<float>(swapChainExtent.height));
+}
+
+DeviceOrientation VulkanRenderer::currentTransformToOrientation(VkSurfaceTransformFlagBitsKHR transform) {
+    switch (transform) {
+        case VK_SURFACE_TRANSFORM_ROTATE_90_BIT_KHR:
+            return DeviceOrientation::Landscape90;
+        case VK_SURFACE_TRANSFORM_ROTATE_180_BIT_KHR:
+            return DeviceOrientation::Portrait180;
+        case VK_SURFACE_TRANSFORM_ROTATE_270_BIT_KHR:
+            return DeviceOrientation::Landscape270;
+        case VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR:
+        default:
+            return DeviceOrientation::Portrait0;
+    }
 }
 
 void VulkanRenderer::handleTouchInput(float x, float y, bool isDown) {
@@ -451,6 +464,7 @@ void VulkanRenderer::createSwapChain() {
     }
     aout << "Vulkan currentTransform: " << swapChainSupport.capabilities.currentTransform << " (" << transformName << ")" << std::endl;
     aout << "Vulkan using preTransform: currentTransform (matches device orientation)" << std::endl;
+    aout << "  Device orientation detected from Vulkan currentTransform (not Android APIs)" << std::endl;
     aout << "  Camera will rotate to compensate" << std::endl;
 
     VkSurfaceFormatKHR surfaceFormat = chooseSwapSurfaceFormat(swapChainSupport.formats);
@@ -484,6 +498,7 @@ void VulkanRenderer::createSwapChain() {
     }
 
     createInfo.preTransform = swapChainSupport.capabilities.currentTransform;
+    currentTransform = swapChainSupport.capabilities.currentTransform;
     createInfo.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
     createInfo.presentMode = presentMode;
     createInfo.clipped = VK_TRUE;
@@ -1377,6 +1392,7 @@ void VulkanRenderer::drawFrame() {
     VkResult result = vkAcquireNextImageKHR(device, swapChain, UINT64_MAX, imageAvailableSemaphores[currentFrame], VK_NULL_HANDLE, &imageIndex);
 
     if (result == VK_ERROR_OUT_OF_DATE_KHR) {
+        aout << "vkAcquireNextImageKHR recreateSwapChain" << std::endl;
         recreateSwapChain();
         return;
     } else if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) {
@@ -1422,6 +1438,7 @@ void VulkanRenderer::drawFrame() {
     result = vkQueuePresentKHR(presentQueue, &presentInfo);
 
     if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR || framebufferResized) {
+        aout << "vkQueuePresentKHR recreateSwapChain" << std::endl;
         framebufferResized = false;
         recreateSwapChain();
     } else if (result != VK_SUCCESS) {

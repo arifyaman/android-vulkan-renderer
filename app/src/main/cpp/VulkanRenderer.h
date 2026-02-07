@@ -73,6 +73,7 @@ public:
     void handleTouchInput(float x, float y, bool isDown);
     void recreateSwapChain();
     void updateCameraOrientation();
+    DeviceOrientation currentTransformToOrientation(VkSurfaceTransformFlagBitsKHR transform);
 
 private:
     android_app* app_;
@@ -169,6 +170,9 @@ private:
 
     // Camera
     Camera camera;
+
+    // Current surface transform from Vulkan (used to determine device orientation)
+    VkSurfaceTransformFlagBitsKHR currentTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
 
     // Dynamic rendering function pointers
     PFN_vkCmdBeginRenderingKHR vkCmdBeginRenderingKHR = nullptr;
