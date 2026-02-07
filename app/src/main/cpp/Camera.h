@@ -28,8 +28,20 @@ public:
         updateProjectionMatrix();
     }
 
+    void setOrientation(DeviceOrientation orientation) {
+        if (currentOrientation != orientation) {
+            currentOrientation = orientation;
+            updateViewMatrix();
+        }
+    }
+
     void setAspectRatio(float width, float height) {
         float newAspect = width / height;
+        // When camera is rotated 90/270 degrees (landscape), swap aspect ratio to match rotated view
+        if (currentOrientation == DeviceOrientation::Landscape90 ||
+            currentOrientation == DeviceOrientation::Landscape270) {
+            newAspect = 1.0f / newAspect;
+        }
 
         if (aspectRatio != newAspect) {
             aspectRatio = newAspect;
@@ -60,6 +72,27 @@ private:
         glm::vec3 up = glm::vec3(0.0f, 0.0f, 1.0f);
 
         matrices.view = glm::lookAt(eye, center, up);
+
+        // Apply device orientation rotation to compensate for swapchain transform
+        float angle = 0.0f;
+        switch (currentOrientation) {
+            case DeviceOrientation::Landscape90:
+                angle = glm::radians(-90.0f);
+                break;
+            case DeviceOrientation::Portrait180:
+                angle = glm::radians(-180.0f);
+                break;
+            case DeviceOrientation::Landscape270:
+                angle = glm::radians(-270.0f);
+                break;
+            default:
+                break;
+        }
+
+        if (angle != 0.0f) {
+            glm::mat4 preRotate = glm::rotate(glm::mat4(1.0f), angle, glm::vec3(0.0f, 0.0f, 1.0f));
+            matrices.view = preRotate * matrices.view;
+        }
 
         updated = true;
     }

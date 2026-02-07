@@ -141,6 +141,11 @@ void VulkanRenderer::render() {
 }
 
 void VulkanRenderer::updateCameraOrientation() {
+    // Get actual device orientation from Android
+    DeviceOrientation orientation = AndroidHelper::getDeviceOrientation(app_);
+
+    camera.setOrientation(orientation);
+
     // Update aspect ratio for projection matrix
     camera.setAspectRatio(static_cast<float>(swapChainExtent.width),
                           static_cast<float>(swapChainExtent.height));
@@ -445,7 +450,8 @@ void VulkanRenderer::createSwapChain() {
         default: break;
     }
     aout << "Vulkan currentTransform: " << swapChainSupport.capabilities.currentTransform << " (" << transformName << ")" << std::endl;
-    aout << "Vulkan using preTransform: IDENTITY_BIT_KHR (render normally, compositor handles rotation)" << std::endl;
+    aout << "Vulkan using preTransform: currentTransform (matches device orientation)" << std::endl;
+    aout << "  Camera will rotate to compensate" << std::endl;
 
     VkSurfaceFormatKHR surfaceFormat = chooseSwapSurfaceFormat(swapChainSupport.formats);
     VkPresentModeKHR presentMode = chooseSwapPresentMode(swapChainSupport.presentModes);
@@ -477,7 +483,7 @@ void VulkanRenderer::createSwapChain() {
         createInfo.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
     }
 
-    createInfo.preTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
+    createInfo.preTransform = swapChainSupport.capabilities.currentTransform;
     createInfo.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
     createInfo.presentMode = presentMode;
     createInfo.clipped = VK_TRUE;
@@ -1417,7 +1423,7 @@ void VulkanRenderer::drawFrame() {
 
     if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR || framebufferResized) {
         framebufferResized = false;
-        //recreateSwapChain();
+        recreateSwapChain();
     } else if (result != VK_SUCCESS) {
         throw std::runtime_error("failed to present swap chain image!");
     }
