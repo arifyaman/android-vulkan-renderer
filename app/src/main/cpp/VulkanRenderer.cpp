@@ -68,6 +68,7 @@ VKAPI_ATTR VkBool32 VKAPI_CALL VulkanRenderer::debugCallback(
 }
 
 VulkanRenderer::VulkanRenderer(android_app* app) : app_(app) {
+    lastFrameTime = std::chrono::high_resolution_clock::now();
     initVulkan();
 }
 
@@ -140,55 +141,35 @@ void VulkanRenderer::render() {
 }
 
 void VulkanRenderer::updateCameraOrientation() {
-    // Get actual device orientation from Android
-    DeviceOrientation orientation = AndroidHelper::getDeviceOrientation(app_);
-
-    camera.setOrientation(orientation);
-
     // Update aspect ratio for projection matrix
     camera.setAspectRatio(static_cast<float>(swapChainExtent.width),
                           static_cast<float>(swapChainExtent.height));
 }
 
 void VulkanRenderer::handleTouchInput(float x, float y, bool isDown) {
-    // Get current window dimensions
     int32_t width = ANativeWindow_getWidth(app_->window);
     int32_t height = ANativeWindow_getHeight(app_->window);
 
-    // Normalize to [0, 1] range based on current orientation
     float normalizedX = x / static_cast<float>(width);
     float normalizedY = y / static_cast<float>(height);
 
+    aout << "Touch event - screen: (" << x << ", " << y << ") normalized: (" << normalizedX << ", " << normalizedY << ") isDown: " << (isDown ? "true" : "false") << std::endl;
+
     if (isDown) {
         if (!isDragging) {
+            aout << "  Touch START - startX: " << touchStartX << ", startY: " << touchStartY << std::endl;
             isDragging = true;
             touchStartX = normalizedX;
             touchStartY = normalizedY;
-            rotationAtTouchStart = currentRotation;
         } else {
-            currentTouchX = normalizedX;
-            currentTouchY = normalizedY;
-
-            float totalDeltaX = currentTouchX - touchStartX;
-            float totalDeltaY = currentTouchY - touchStartY;
-
-            // Get camera vectors (already calculated based on orientation)
-            glm::vec3 cameraRight = camera.getRight();
-            glm::vec3 cameraUp = camera.getUp();
-
-            float rotationSpeed = 3.0f;
-
-            float angleAroundUp = totalDeltaX * rotationSpeed;
-            float angleAroundRight = totalDeltaY * rotationSpeed;
-
-            glm::quat rotationAroundUp = glm::angleAxis(angleAroundUp, cameraUp);
-            glm::quat rotationAroundRight = glm::angleAxis(angleAroundRight, cameraRight);
-
-            glm::quat deltaRotation = rotationAroundUp * rotationAroundRight;
-            targetRotation = deltaRotation * rotationAtTouchStart;
+            aout << "  Touch DRAG - currentX: " << normalizedX << ", currentY: " << normalizedY << " startX: " << touchStartX << ", startY: " << touchStartY << std::endl;
+            touchStartX = normalizedX;
+            touchStartY = normalizedY;
         }
     } else {
+        aout << "  Touch UP - was dragging: " << (isDragging ? "true" : "false") << std::endl;
         isDragging = false;
+        isPinching = false;
     }
 }
 
@@ -450,6 +431,22 @@ void VulkanRenderer::createSwapChain() {
     aout << "Surface capabilities - minImageCount: " << swapChainSupport.capabilities.minImageCount
          << ", maxImageCount: " << swapChainSupport.capabilities.maxImageCount << std::endl;
 
+    // Log Vulkan pre-transform for orientation debugging
+    const char* transformName = "IDENTITY";
+    switch (swapChainSupport.capabilities.currentTransform) {
+        case VK_SURFACE_TRANSFORM_ROTATE_90_BIT_KHR: transformName = "ROTATE_90"; break;
+        case VK_SURFACE_TRANSFORM_ROTATE_180_BIT_KHR: transformName = "ROTATE_180"; break;
+        case VK_SURFACE_TRANSFORM_ROTATE_270_BIT_KHR: transformName = "ROTATE_270"; break;
+        case VK_SURFACE_TRANSFORM_HORIZONTAL_MIRROR_BIT_KHR: transformName = "HORIZONTAL_MIRROR"; break;
+        case VK_SURFACE_TRANSFORM_HORIZONTAL_MIRROR_ROTATE_90_BIT_KHR: transformName = "HORIZONTAL_MIRROR_ROTATE_90"; break;
+        case VK_SURFACE_TRANSFORM_HORIZONTAL_MIRROR_ROTATE_180_BIT_KHR: transformName = "HORIZONTAL_MIRROR_ROTATE_180"; break;
+        case VK_SURFACE_TRANSFORM_HORIZONTAL_MIRROR_ROTATE_270_BIT_KHR: transformName = "HORIZONTAL_MIRROR_ROTATE_270"; break;
+        case VK_SURFACE_TRANSFORM_INHERIT_BIT_KHR: transformName = "INHERIT"; break;
+        default: break;
+    }
+    aout << "Vulkan currentTransform: " << swapChainSupport.capabilities.currentTransform << " (" << transformName << ")" << std::endl;
+    aout << "Vulkan using preTransform: IDENTITY_BIT_KHR (render normally, compositor handles rotation)" << std::endl;
+
     VkSurfaceFormatKHR surfaceFormat = chooseSwapSurfaceFormat(swapChainSupport.formats);
     VkPresentModeKHR presentMode = chooseSwapPresentMode(swapChainSupport.presentModes);
     VkExtent2D extent = chooseSwapExtent(swapChainSupport.capabilities);
@@ -480,7 +477,7 @@ void VulkanRenderer::createSwapChain() {
         createInfo.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
     }
 
-    createInfo.preTransform = swapChainSupport.capabilities.currentTransform;
+    createInfo.preTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
     createInfo.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
     createInfo.presentMode = presentMode;
     createInfo.clipped = VK_TRUE;
@@ -619,7 +616,7 @@ void VulkanRenderer::createGraphicsPipeline() {
     rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
     rasterizer.lineWidth = 1.0f;
     rasterizer.cullMode = VK_CULL_MODE_BACK_BIT;
-    rasterizer.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    rasterizer.frontFace = VK_FRONT_FACE_CLOCKWISE;  // Changed from COUNTER_CLOCKWISE to match OBJ winding
     rasterizer.depthBiasEnable = VK_FALSE;
 
     VkPipelineMultisampleStateCreateInfo multisampling{};
@@ -774,7 +771,7 @@ void VulkanRenderer::loadSingleTexture(const std::string& filename, int textureI
 
     createImage(texWidth, texHeight, 1, VK_SAMPLE_COUNT_1_BIT, VK_FORMAT_R8G8B8A8_SRGB,
                 VK_IMAGE_TILING_OPTIMAL,
-                VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
                 VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, image, imageMemory);
 
     transitionImageLayout(image, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_LAYOUT_UNDEFINED,
@@ -794,7 +791,10 @@ void VulkanRenderer::loadSingleTexture(const std::string& filename, int textureI
 void VulkanRenderer::createTextures() {
     aout << "Creating textures for " << materialToTextureFile.size() << " materials" << std::endl;
 
-    // Get all unique texture filenames from materials
+    // Build a map from texture filename to array index
+    std::map<std::string, int> textureFileToIndex;
+    
+    // Get all unique texture filenames from materials (sorted for consistent ordering)
     std::set<std::string> textureFilenames;
     for (const auto& pair : materialToTextureFile) {
         textureFilenames.insert(pair.second);
@@ -808,15 +808,56 @@ void VulkanRenderer::createTextures() {
 
     aout << "Total unique textures to load: " << textureFilenames.size() << std::endl;
 
-    // Load all textures
+    // Load all textures and build filename->index mapping
     int index = 0;
     for (const auto& filename : textureFilenames) {
         loadSingleTexture(filename, index);
+        textureFileToIndex[filename] = index;
         index++;
     }
 
     numTextures = index;
     aout << "Loaded " << numTextures << " texture images" << std::endl;
+
+    // Build old index to new index mapping before updating materialToTextureIndex
+    std::unordered_map<int, int> oldToNewIndexMap;
+    for (const auto& pair : materialToTextureIndex) {
+        const std::string& materialName = pair.first;
+        int oldIndex = pair.second;
+        if (materialToTextureFile.count(materialName)) {
+            const std::string& textureFile = materialToTextureFile[materialName];
+            int newIndex = textureFileToIndex[textureFile];
+            oldToNewIndexMap[oldIndex] = newIndex;
+        }
+    }
+
+    // Update materialToTextureIndex to use the correct array indices
+    for (auto& pair : materialToTextureIndex) {
+        const std::string& materialName = pair.first;
+        if (materialToTextureFile.count(materialName)) {
+            const std::string& textureFile = materialToTextureFile[materialName];
+            pair.second = textureFileToIndex[textureFile];
+            aout << "Updated material " << materialName << " -> texture index " << pair.second 
+                 << " (file: " << textureFile << ")" << std::endl;
+        }
+    }
+
+    // Update all vertex texture indices that were created with old indices
+    aout << "Remapping vertex texture indices..." << std::endl;
+    for (auto& vertex : vertices) {
+        if (oldToNewIndexMap.count(vertex.texIndex)) {
+            int oldIdx = vertex.texIndex;
+            vertex.texIndex = oldToNewIndexMap[oldIdx];
+            if (oldIdx != vertex.texIndex) {
+                static int remapCount = 0;
+                if (remapCount < 5) {  // Log first few remappings
+                    aout << "  Vertex texIndex remapped: " << oldIdx << " -> " << vertex.texIndex << std::endl;
+                    remapCount++;
+                }
+            }
+        }
+    }
+    aout << "Vertex texture index remapping complete" << std::endl;
 
     // Create image views
     for (size_t i = 0; i < textureImages.size(); i++) {
@@ -843,7 +884,7 @@ void VulkanRenderer::createTextures() {
     samplerInfo.compareOp = VK_COMPARE_OP_ALWAYS;
     samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
     samplerInfo.minLod = 0.0f;
-    samplerInfo.maxLod = 1.0f;
+    samplerInfo.maxLod = 0.0f;
     samplerInfo.mipLodBias = 0.0f;
 
     for (size_t i = 0; i < numTextures; i++) {
@@ -1090,7 +1131,7 @@ void VulkanRenderer::loadModel() {
             if (vi >= 0 && vi * 3 + 2 < attrib.vertices.size()) {
                 vertex.pos = {
                     attrib.vertices[3 * vi + 0],
-                    attrib.vertices[3 * vi + 1],
+                    -attrib.vertices[3 * vi + 1],
                     attrib.vertices[3 * vi + 2]
                 };
             }
@@ -1116,6 +1157,22 @@ void VulkanRenderer::loadModel() {
 
     aout << "Loaded " << vertices.size() << " vertices, " << indices.size() << " indices" << std::endl;
     aout << "Total materials: " << materialToTextureIndex.size() << std::endl;
+    
+    // Calculate and log model bounds
+    if (!vertices.empty()) {
+        glm::vec3 minBounds(FLT_MAX);
+        glm::vec3 maxBounds(-FLT_MAX);
+        for (const auto& vertex : vertices) {
+            minBounds = glm::min(minBounds, vertex.pos);
+            maxBounds = glm::max(maxBounds, vertex.pos);
+        }
+        glm::vec3 center = (minBounds + maxBounds) * 0.5f;
+        glm::vec3 size = maxBounds - minBounds;
+        aout << "Model bounds - Min: (" << minBounds.x << ", " << minBounds.y << ", " << minBounds.z << ")" << std::endl;
+        aout << "Model bounds - Max: (" << maxBounds.x << ", " << maxBounds.y << ", " << maxBounds.z << ")" << std::endl;
+        aout << "Model center: (" << center.x << ", " << center.y << ", " << center.z << ")" << std::endl;
+        aout << "Model size: (" << size.x << ", " << size.y << ", " << size.z << ")" << std::endl;
+    }
 }
 
 void VulkanRenderer::createVertexBuffer() {
@@ -1360,7 +1417,7 @@ void VulkanRenderer::drawFrame() {
 
     if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR || framebufferResized) {
         framebufferResized = false;
-        recreateSwapChain();
+        //recreateSwapChain();
     } else if (result != VK_SUCCESS) {
         throw std::runtime_error("failed to present swap chain image!");
     }
@@ -1375,6 +1432,32 @@ void VulkanRenderer::recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t
     if (vkBeginCommandBuffer(commandBuffer, &beginInfo) != VK_SUCCESS) {
         throw std::runtime_error("failed to begin recording command buffer!");
     }
+
+    // Transition swapchain image to COLOR_ATTACHMENT_OPTIMAL for rendering
+    VkImageMemoryBarrier imageBarrierToColor{};
+    imageBarrierToColor.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    imageBarrierToColor.srcAccessMask = 0;
+    imageBarrierToColor.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    imageBarrierToColor.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    imageBarrierToColor.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    imageBarrierToColor.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    imageBarrierToColor.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    imageBarrierToColor.image = swapChainImages[imageIndex];
+    imageBarrierToColor.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    imageBarrierToColor.subresourceRange.baseMipLevel = 0;
+    imageBarrierToColor.subresourceRange.levelCount = 1;
+    imageBarrierToColor.subresourceRange.baseArrayLayer = 0;
+    imageBarrierToColor.subresourceRange.layerCount = 1;
+
+    vkCmdPipelineBarrier(
+        commandBuffer,
+        VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+        0,
+        0, nullptr,
+        0, nullptr,
+        1, &imageBarrierToColor
+    );
 
     // Dynamic rendering: Prepare color attachment
     VkRenderingAttachmentInfoKHR colorAttachment{};
@@ -1438,10 +1521,43 @@ void VulkanRenderer::recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t
 
     vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 1, &descriptorSets[currentFrame], 0, nullptr);
 
+    // Log draw info once
+    static bool logged = false;
+    if (!logged) {
+        aout << "Drawing " << indices.size() << " indices, " << vertices.size() << " vertices" << std::endl;
+        logged = true;
+    }
+
     vkCmdDrawIndexed(commandBuffer, static_cast<uint32_t>(indices.size()), 1, 0, 0, 0);
 
     // Dynamic rendering: End rendering
     vkCmdEndRenderingKHR(commandBuffer);
+
+    // Transition swapchain image to PRESENT_SRC for presentation
+    VkImageMemoryBarrier imageBarrierToPresent{};
+    imageBarrierToPresent.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    imageBarrierToPresent.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    imageBarrierToPresent.dstAccessMask = 0;
+    imageBarrierToPresent.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    imageBarrierToPresent.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+    imageBarrierToPresent.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    imageBarrierToPresent.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    imageBarrierToPresent.image = swapChainImages[imageIndex];
+    imageBarrierToPresent.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    imageBarrierToPresent.subresourceRange.baseMipLevel = 0;
+    imageBarrierToPresent.subresourceRange.levelCount = 1;
+    imageBarrierToPresent.subresourceRange.baseArrayLayer = 0;
+    imageBarrierToPresent.subresourceRange.layerCount = 1;
+
+    vkCmdPipelineBarrier(
+        commandBuffer,
+        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+        VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+        0,
+        0, nullptr,
+        0, nullptr,
+        1, &imageBarrierToPresent
+    );
 
     if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS) {
         throw std::runtime_error("failed to record command buffer!");
@@ -1449,23 +1565,15 @@ void VulkanRenderer::recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t
 }
 
 void VulkanRenderer::updateUniformBuffer(uint32_t currentImage) {
-    // Frame-rate independent slerp (locked to 60 FPS behavior)
-    static auto lastUpdateTime = std::chrono::high_resolution_clock::now();
     auto currentTime = std::chrono::high_resolution_clock::now();
-    float deltaTime = std::chrono::duration<float>(currentTime - lastUpdateTime).count();
-    lastUpdateTime = currentTime;
+    float deltaTime = std::chrono::duration<float>(currentTime - lastFrameTime).count();
+    lastFrameTime = currentTime;
 
-    // Base slerp speed for 60 FPS (1/60 = 0.0167 seconds per frame)
-    float baseSlerpSpeed = 0.1f; // Speed at 60 FPS
-    // Normalize to 60 FPS: multiply by deltaTime * 60
-    float slerpFactor = glm::clamp(baseSlerpSpeed * deltaTime * 60.0f, 0.0f, 1.0f);
-    currentRotation = glm::slerp(currentRotation, targetRotation, slerpFactor);
+    //camera.updateOrbitAnimation(deltaTime);
 
     UniformBufferObject ubo{};
-    // Use quaternion rotation from touch input
-    ubo.model = glm::mat4_cast(currentRotation);
+    ubo.model = glm::mat4(1.0f);
 
-    // Get pre-calculated matrices from camera
     ubo.view = camera.getViewMatrix();
     ubo.proj = camera.getProjectionMatrix();
 

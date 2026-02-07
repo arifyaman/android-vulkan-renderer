@@ -159,9 +159,13 @@ private:
     float touchStartY = 0.0f;
     float currentTouchX = 0.0f;
     float currentTouchY = 0.0f;
-    glm::quat rotationAtTouchStart = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
-    glm::quat currentRotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
-    glm::quat targetRotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
+    float cameraRadiusAtTouchStart = 0.0f;
+    glm::quat cameraRotationAtTouchStart = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
+    bool isPinching = false;
+    float pinchStartDistance = 0.0f;
+
+    // Frame timing for smooth animation
+    std::chrono::time_point<std::chrono::high_resolution_clock> lastFrameTime;
 
     // Camera
     Camera camera;

@@ -1,7 +1,7 @@
 # Blender 5.0.0 MTL File: 'None'
 # www.blender.org
 
-newmtl lambert5SG.001
+newmtl lambert5SG.004
 Ns 360.000000
 Ka 1.000000 1.000000 1.000000
 Kd 0.800000 0.800000 0.800000
@@ -11,7 +11,7 @@ Ni 1.000000
 d 1.000000
 illum 2
 
-newmtl lambert6SG.001
+newmtl lambert6SG.004
 Ns 360.000000
 Ka 1.000000 1.000000 1.000000
 Kd 0.800000 0.800000 0.800000
@@ -21,7 +21,7 @@ Ni 1.000000
 d 1.000000
 illum 2
 
-newmtl lambert7SG.001
+newmtl lambert7SG.004
 Ns 360.000000
 Ka 1.000000 1.000000 1.000000
 Kd 0.800000 0.800000 0.800000

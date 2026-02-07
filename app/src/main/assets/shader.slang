@@ -19,11 +19,10 @@ struct UniformBufferObject
 [[vk::binding(0, 0)]]
 ConstantBuffer<UniformBufferObject> ubo;
 
-// Phase 1: Array of textures (Texture2DArray approach)
-// Phase 2: Will convert to bindless descriptor array
+// Phase 1: Combined image sampler array
+// In SPIR-V, we bind both texture and sampler together
 [[vk::binding(1, 0)]]
-Texture2D textures[MAX_MATERIALS];
-SamplerState texSampler;
+Sampler2D texSamplers[MAX_MATERIALS];
 
 // Vertex shader input
 struct VertexInput
@@ -71,8 +70,7 @@ struct FragmentOutput
 FragmentOutput fragmentMain(VertexOutput input)
 {
     FragmentOutput output;
-    // Phase 1: Sample from texture array based on index
-    // Phase 2: Will use non-uniform index for bindless textures
-    output.color = textures[input.texIndex].Sample(texSampler, input.texCoord);
+    // Phase 1: Sample from combined image sampler array based on texIndex
+    output.color = texSamplers[input.texIndex].Sample(input.texCoord);
     return output;
 }
