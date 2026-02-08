@@ -70,7 +70,7 @@ public:
     ~VulkanRenderer();
 
     void render();
-    void handleTouchInput(float x, float y, bool isDown);
+    void handleTouchInput(float x1, float y1, float x2, float y2, int pointerCount, int32_t actionMasked);
     void recreateSwapChain();
     void updateCameraOrientation();
     DeviceOrientation currentTransformToOrientation(VkSurfaceTransformFlagBitsKHR transform);
@@ -164,6 +164,10 @@ private:
     glm::quat cameraRotationAtTouchStart = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
     bool isPinching = false;
     float pinchStartDistance = 0.0f;
+    glm::vec3 pinchStartCameraPos = glm::vec3(0.0f);
+    glm::vec3 pinchStartTargetPos = glm::vec3(0.0f);
+    float minDistance = 10.0f;
+    float maxDistance = 1000.0f;
 
     // Frame timing for smooth animation
     std::chrono::time_point<std::chrono::high_resolution_clock> lastFrameTime;

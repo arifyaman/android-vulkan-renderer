@@ -4,6 +4,7 @@
 #include <android/asset_manager.h>
 #include <android/native_window.h>
 #include <vulkan/vulkan_android.h>
+#include <cmath>
 
 #define STB_IMAGE_IMPLEMENTATION
 #include "lib/stb-master/stb_image.h"
@@ -164,22 +165,74 @@ DeviceOrientation VulkanRenderer::currentTransformToOrientation(VkSurfaceTransfo
     }
 }
 
-void VulkanRenderer::handleTouchInput(float x, float y, bool isDown) {
-    int32_t width = ANativeWindow_getWidth(app_->window);
-    int32_t height = ANativeWindow_getHeight(app_->window);
-    float maxDim = std::max(width, height);
+void VulkanRenderer::handleTouchInput(float x1, float y1, float x2, float y2, int pointerCount, int32_t actionMasked) {
+    // Calculate pinch distance if two pointers
+    float pinchDistance = 0.0f;
+    if (pointerCount == 2) {
+        float dx = x2 - x1;
+        float dy = y2 - y1;
+        pinchDistance = sqrt(dx * dx + dy * dy);
+    }
     
-    aout << "Touch event - screen: (" << x << ", " << y << ") isDown: " << (isDown ? "true" : "false") << std::endl;
-
-    if (isDown) {
-        if (!isDragging) {
-            aout << "  Touch START - startX: " << touchStartX << ", startY: " << touchStartY << std::endl;
-            isDragging = true;
-            touchStartX = x;
-            touchStartY = y;
-        } else {
-            float deltaX = x - touchStartX;
-            float deltaY = y - touchStartY;
+    // Handle pinch gesture (two fingers)
+    if (pointerCount == 2) {
+        if (actionMasked == AMOTION_EVENT_ACTION_POINTER_DOWN && !isPinching) {
+            // Start pinching - store camera position and target
+            isPinching = true;
+            pinchStartDistance = pinchDistance;
+            pinchStartCameraPos = camera.getPosition();
+            pinchStartTargetPos = camera.getTarget();
+            
+            aout << "Pinch START - distance: " << pinchDistance << " camPos: (" 
+                 << pinchStartCameraPos.x << ", " << pinchStartCameraPos.y << ", " << pinchStartCameraPos.z << ")" << std::endl;
+        }
+        else if (actionMasked == AMOTION_EVENT_ACTION_MOVE && isPinching) {
+            // Update zoom based on pinch distance - move camera along look-at line
+            float distanceRatio = pinchDistance / pinchStartDistance;
+            float currentDistance = glm::length(pinchStartCameraPos - pinchStartTargetPos);
+            float newDistance = currentDistance / distanceRatio;
+            
+            // Clamp distance
+            newDistance = glm::clamp(newDistance, minDistance, maxDistance);
+            
+            // Calculate direction from target to camera (normalized)
+            glm::vec3 directionToCamera = glm::normalize(pinchStartCameraPos - pinchStartTargetPos);
+            
+            // Calculate new camera position along the direction line
+            glm::vec3 newCameraPos = pinchStartTargetPos + directionToCamera * newDistance;
+            
+            camera.setPosition(newCameraPos);
+            
+            aout << "Pinch MOVE - distanceRatio: " << distanceRatio << " newDistance: " << newDistance 
+                 << " newCamPos: (" << newCameraPos.x << ", " << newCameraPos.y << ", " << newCameraPos.z << ")" << std::endl;
+        }
+        else if (actionMasked == AMOTION_EVENT_ACTION_POINTER_UP || 
+                 actionMasked == AMOTION_EVENT_ACTION_UP || 
+                 actionMasked == AMOTION_EVENT_ACTION_CANCEL) {
+            // Stop pinching
+            isPinching = false;
+            aout << "Pinch STOP" << std::endl;
+        }
+        return;
+    }
+    
+    // Handle single-finger dragging (one finger)
+    if (pointerCount == 1 && !isPinching) {
+        int32_t width = ANativeWindow_getWidth(app_->window);
+        int32_t height = ANativeWindow_getHeight(app_->window);
+        float maxDim = std::max(width, height);
+        
+        if (actionMasked == AMOTION_EVENT_ACTION_DOWN) {
+            if (!isDragging) {
+                aout << "Touch START - startX: " << touchStartX << ", startY: " << touchStartY << std::endl;
+                isDragging = true;
+                touchStartX = x1;
+                touchStartY = y1;
+            }
+        }
+        else if (actionMasked == AMOTION_EVENT_ACTION_MOVE && isDragging) {
+            float deltaX = x1 - touchStartX;
+            float deltaY = y1 - touchStartY;
             
             float normalizedDeltaX = deltaX / maxDim;
             float normalizedDeltaY = deltaY / maxDim;
@@ -190,15 +243,16 @@ void VulkanRenderer::handleTouchInput(float x, float y, bool isDown) {
             
             camera.adjustTurntableRotation(pitchDelta, yawDelta);
             
-            aout << "  Touch DRAG - normalizedDeltaX: " << normalizedDeltaX << ", normalizedDeltaY: " << normalizedDeltaY << " pitch: " << pitchDelta << ", yaw: " << yawDelta << std::endl;
+            aout << "Touch DRAG - normalizedDeltaX: " << normalizedDeltaX << ", normalizedDeltaY: " << normalizedDeltaY << " pitch: " << pitchDelta << ", yaw: " << yawDelta << std::endl;
             
-            touchStartX = x;
-            touchStartY = y;
+            touchStartX = x1;
+            touchStartY = y1;
         }
-    } else {
-        aout << "  Touch UP - was dragging: " << (isDragging ? "true" : "false") << std::endl;
-        isDragging = false;
-        isPinching = false;
+        else if (actionMasked == AMOTION_EVENT_ACTION_UP || actionMasked == AMOTION_EVENT_ACTION_CANCEL) {
+            aout << "Touch UP - was dragging: " << (isDragging ? "true" : "false") << std::endl;
+            isDragging = false;
+            isPinching = false;
+        }
     }
 }
 

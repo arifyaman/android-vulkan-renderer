@@ -64,6 +64,20 @@ public:
     glm::vec3 getTarget() const {
         return target;
     }
+    
+    void setPosition(glm::vec3 newPos) {
+        position = newPos;
+        updateViewMatrix();
+    }
+    
+    float getFov() const {
+        return fov;
+    }
+    
+    void setFov(float newFov) {
+        fov = glm::clamp(newFov, 1.0f, 180.0f);
+        updateProjectionMatrix();
+    }
 
     void adjustTurntableRotation(float pitchDelta, float yawDelta) {
         targetTurntableRotation.x += pitchDelta;
