@@ -65,15 +65,49 @@ public:
         return target;
     }
 
+    void adjustTurntableRotation(float pitchDelta, float yawDelta) {
+        targetTurntableRotation.x += pitchDelta;
+        targetTurntableRotation.y += yawDelta;
+        updateViewMatrix();
+    }
+    
+    void updateTurntableDamping(float deltaTime) {
+        // FPS-independent damping: interpolate current towards target
+        float dampingFactor = 10.0f;
+        currentTurntableRotation += (targetTurntableRotation - currentTurntableRotation) * dampingFactor * deltaTime;
+        
+        // Recalculate view matrix with smoothed rotation
+        updateViewMatrix();
+    }
+
 private:
     void updateViewMatrix() {
         glm::vec3 eye = position;
         glm::vec3 center = target;
         glm::vec3 up = glm::vec3(0.0f, 0.0f, 1.0f);
-
-        matrices.view = glm::lookAt(eye, center, up);
-
-        // Apply device orientation rotation to compensate for swapchain transform
+        
+        // Use glm::lookAt to get base view matrix
+        glm::mat4 lookAtMat = glm::lookAt(eye, center, up);
+        
+        // Build turntable rotation matrix from CURRENT rotation (smoothed)
+        glm::mat4 turntableRotM = glm::mat4(1.0f);
+        turntableRotM = glm::rotate(turntableRotM, currentTurntableRotation.x, glm::vec3(1.0f, 0.0f, 0.0f));
+        turntableRotM = glm::rotate(turntableRotM, currentTurntableRotation.y, glm::vec3(0.0f, 1.0f, 0.0f));
+        turntableRotM = glm::rotate(turntableRotM, currentTurntableRotation.z, glm::vec3(0.0f, 0.0f, 1.0f));
+        
+        // Extract rotation part (3x3) from lookAt
+        glm::mat4 lookAtRot = glm::mat3(lookAtMat);
+        
+        // Apply turntable rotation
+        glm::mat4 combinedRot = turntableRotM * lookAtRot;
+        
+        // Rebuild view matrix: rotation part in upper 3x3, Translation in 4th column
+        matrices.view = glm::mat4(combinedRot);
+        matrices.view[3][0] = lookAtMat[3][0];
+        matrices.view[3][1] = lookAtMat[3][1];
+        matrices.view[3][2] = lookAtMat[3][2];
+        
+        // Apply device orientation rotation LAST
         float angle = 0.0f;
         switch (currentOrientation) {
             case DeviceOrientation::Landscape90:
@@ -115,6 +149,12 @@ private:
     float farPlane;
     bool flipY;
     bool updated;
+
+    glm::vec3 turntableRotation = glm::vec3(0.0f, 0.0f, 0.0f);
+    
+    glm::vec3 targetTurntableRotation = glm::vec3(0.0f, 0.0f, 0.0f);
+    glm::vec3 currentTurntableRotation = glm::vec3(0.0f, 0.0f, 0.0f);
+    float dampingFactor = 10.0f;
 
     struct {
         glm::mat4 perspective;

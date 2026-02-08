@@ -180,7 +180,17 @@ void VulkanRenderer::handleTouchInput(float x, float y, bool isDown) {
             touchStartX = normalizedX;
             touchStartY = normalizedY;
         } else {
-            aout << "  Touch DRAG - currentX: " << normalizedX << ", currentY: " << normalizedY << " startX: " << touchStartX << ", startY: " << touchStartY << std::endl;
+            float deltaX = normalizedX - touchStartX;
+            float deltaY = normalizedY - touchStartY;
+            
+            float sensitivity = 2.0f;
+            float pitchDelta = deltaY * sensitivity;
+            float yawDelta = deltaX * sensitivity;
+            
+            camera.adjustTurntableRotation(pitchDelta, yawDelta);
+            
+            aout << "  Touch DRAG - deltaX: " << deltaX << ", deltaY: " << deltaY << " pitch: " << pitchDelta << ", yaw: " << yawDelta << std::endl;
+            
             touchStartX = normalizedX;
             touchStartY = normalizedY;
         }
@@ -1373,18 +1383,23 @@ void VulkanRenderer::createSyncObjects() {
 void VulkanRenderer::drawFrame() {
     // FPS counter
     static auto lastTime = std::chrono::high_resolution_clock::now();
+    static auto lastFpsTime = lastTime;
     static int frameCount = 0;
     frameCount++;
 
     auto currentTime = std::chrono::high_resolution_clock::now();
     float deltaTime = std::chrono::duration<float>(currentTime - lastTime).count();
+    lastTime = currentTime;
 
-    if (deltaTime >= 1.0f) {
-        float fps = frameCount / deltaTime;
+    if (std::chrono::duration<float>(currentTime - lastFpsTime).count() >= 1.0f) {
+        float fps = frameCount / std::chrono::duration<float>(currentTime - lastFpsTime).count();
         aout << "FPS: " << fps << std::endl;
         frameCount = 0;
-        lastTime = currentTime;
+        lastFpsTime = currentTime;
     }
+    
+    // Update camera damping for smooth rotation (FPS-independent)
+    camera.updateTurntableDamping(deltaTime);
 
     vkWaitForFences(device, 1, &inFlightFences[currentFrame], VK_TRUE, UINT64_MAX);
 
