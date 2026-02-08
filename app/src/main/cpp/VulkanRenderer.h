@@ -18,6 +18,8 @@
 #include <glm/gtx/quaternion.hpp>
 
 #include "Camera.h"
+#include "CameraController.h"
+#include <memory>
 
 struct QueueFamilyIndices {
     std::optional<uint32_t> graphicsFamily;
@@ -69,6 +71,7 @@ public:
     explicit VulkanRenderer(android_app* app);
     ~VulkanRenderer();
 
+    void initCamera();
     void render();
     void handleTouchInput(float x1, float y1, float x2, float y2, int pointerCount, int32_t actionMasked);
     void recreateSwapChain();
@@ -154,22 +157,12 @@ private:
     uint32_t currentFrame = 0;
     bool framebufferResized = false;
 
-    // Touch input state
-    bool isDragging = false;
-    float minDistance = 10.0f;
-    float maxDistance = 1000.0f;
-    float lastTouchX = 0.0f;
-    float lastTouchY = 0.0f;
-    float lastTwoFingerDistance = 0.0f;
-    glm::vec2 lastTwoFingerMidpoint = glm::vec2(0.0f);
-    glm::vec3 twoFingerStartCameraPos = glm::vec3(0.0f);
-    glm::vec3 twoFingerStartTargetPos = glm::vec3(0.0f);
-
     // Frame timing for smooth animation
     std::chrono::time_point<std::chrono::high_resolution_clock> lastFrameTime;
 
     // Camera
     Camera camera;
+    std::unique_ptr<CameraController> cameraController;
 
     // Current surface transform from Vulkan (used to determine device orientation)
     VkSurfaceTransformFlagBitsKHR currentTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;

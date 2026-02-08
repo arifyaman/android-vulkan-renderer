@@ -1,5 +1,6 @@
 #include "VulkanRenderer.h"
 #include "AndroidOut.h"
+#include "CameraController.h"
 
 #include <android/asset_manager.h>
 #include <android/native_window.h>
@@ -165,138 +166,29 @@ DeviceOrientation VulkanRenderer::currentTransformToOrientation(VkSurfaceTransfo
     }
 }
 
-void VulkanRenderer::handleTouchInput(float x1, float y1, float x2, float y2, int pointerCount, int32_t actionMasked) {
-    // Get screen dimensions for normalization
+void VulkanRenderer::initCamera() {
+    camera.setPosition(glm::vec3(250.0f, 0.0f, 100.0f));
+    camera.setTarget(glm::vec3(0.0f, 0.0f, 0.0f));
+
+    cameraController = std::make_unique<CameraController>(camera);
+    cameraController->setDistanceLimits(10.0f, 1000.0f);
+    cameraController->setRotationSensitivity(3.0f);
+    cameraController->setPanSensitivity(2.0f);
+}
+
+void VulkanRenderer::handleTouchInput(float x1, float y1, float x2, float y2, 
+                                        int pointerCount, int32_t actionMasked) {
     int32_t width = ANativeWindow_getWidth(app_->window);
     int32_t height = ANativeWindow_getHeight(app_->window);
-    float maxDim = std::max(width, height);
 
-    // ========== TWO FINGER GESTURES ==========
-    if (pointerCount == 2) {
-        // Calculate current pinch distance and midpoint
-        float dx = x2 - x1;
-        float dy = y2 - y1;
-        float currentDistance = sqrt(dx * dx + dy * dy);
-        glm::vec2 currentMidpoint = glm::vec2((x1 + x2) * 0.5f, (y1 + y2) * 0.5f);
-
-        if (actionMasked == AMOTION_EVENT_ACTION_POINTER_DOWN) {
-            // Initialize two-finger gesture tracking
-            lastTwoFingerDistance = currentDistance;
-            lastTwoFingerMidpoint = currentMidpoint;
-            twoFingerStartCameraPos = camera.getPosition();
-            twoFingerStartTargetPos = camera.getTarget();
-
-            aout << "Two-finger gesture started" << std::endl;
-        }
-        else if (actionMasked == AMOTION_EVENT_ACTION_MOVE) {
-            // Calculate deltas
-            float distanceDelta = currentDistance - lastTwoFingerDistance;
-            glm::vec2 midpointDelta = currentMidpoint - lastTwoFingerMidpoint;
-
-            // PINCH TO ZOOM - distance between fingers changed
-            if (abs(distanceDelta) > 1.0f) {  // Small threshold to avoid jitter
-                float zoomFactor = currentDistance / lastTwoFingerDistance;
-
-                // Calculate new camera distance from target
-                glm::vec3 camToTarget = camera.getTarget() - camera.getPosition();
-                float currentCamDistance = glm::length(camToTarget);
-                float newCamDistance = currentCamDistance / zoomFactor;
-
-                // Clamp distance
-                newCamDistance = glm::clamp(newCamDistance, minDistance, maxDistance);
-
-                // Move camera along view direction
-                glm::vec3 viewDir = glm::normalize(camToTarget);
-                glm::vec3 newCameraPos = camera.getTarget() - viewDir * newCamDistance;
-
-                camera.setPosition(newCameraPos);
-
-                aout << "Pinch zoom - factor: " << zoomFactor << " distance: " << newCamDistance << std::endl;
-            }
-
-            // PAN - midpoint moved (both fingers moving together)
-            float midpointMovement = glm::length(midpointDelta);
-            if (midpointMovement > 1.0f) {  // Small threshold to avoid jitter
-                // Normalize the movement
-                float normalizedDeltaX = midpointDelta.x / maxDim;
-                float normalizedDeltaY = midpointDelta.y / maxDim;
-
-                // Calculate camera coordinate system
-                glm::vec3 viewDir = glm::normalize(camera.getTarget() - camera.getPosition());
-                glm::vec3 worldUp = glm::vec3(0.0f, 0.0f, 1.0f);
-                glm::vec3 cameraRight = glm::normalize(glm::cross(viewDir, worldUp));
-                glm::vec3 cameraUp = glm::normalize(glm::cross(cameraRight, viewDir));
-
-                // Pan sensitivity scales with distance from target
-                float camDistance = glm::length(camera.getTarget() - camera.getPosition());
-                float panSensitivity = camDistance * 2.0f;
-
-                // Calculate movement in world space (inverted X for natural feel)
-                glm::vec3 panMovement = -cameraRight * (normalizedDeltaX * panSensitivity)
-                                        + cameraUp * (normalizedDeltaY * panSensitivity);
-
-                // Move both camera and target together
-                camera.setPosition(camera.getPosition() + panMovement);
-                camera.setTarget(camera.getTarget() + panMovement);
-
-                aout << "Pan - movement: (" << panMovement.x << ", " << panMovement.y << ", " << panMovement.z << ")" << std::endl;
-            }
-
-            // Update last values for next frame
-            lastTwoFingerDistance = currentDistance;
-            lastTwoFingerMidpoint = currentMidpoint;
-        }
-        else if (actionMasked == AMOTION_EVENT_ACTION_POINTER_UP ||
-                 actionMasked == AMOTION_EVENT_ACTION_UP ||
-                 actionMasked == AMOTION_EVENT_ACTION_CANCEL) {
-            aout << "Two-finger gesture ended" << std::endl;
-        }
-
-        // Prevent single-finger drag from interfering
-        isDragging = false;
-        return;
-    }
-
-    // ========== SINGLE FINGER ROTATION ==========
-    if (pointerCount == 1) {
-        if (actionMasked == AMOTION_EVENT_ACTION_DOWN) {
-            isDragging = true;
-            lastTouchX = x1;
-            lastTouchY = y1;
-            aout << "Single-finger drag started" << std::endl;
-        }
-        else if (actionMasked == AMOTION_EVENT_ACTION_MOVE && isDragging) {
-            // Calculate delta from last position
-            float deltaX = x1 - lastTouchX;
-            float deltaY = y1 - lastTouchY;
-
-            // Normalize to screen size
-            float normalizedDeltaX = deltaX / maxDim;
-            float normalizedDeltaY = deltaY / maxDim;
-
-            // Apply rotation sensitivity
-            float rotationSensitivity = 3.0f;
-            float yawDelta = normalizedDeltaX * rotationSensitivity;
-            float pitchDelta = normalizedDeltaY * rotationSensitivity;
-
-            // Apply turntable rotation (orbit around target)
-            camera.adjustTurntableRotation(pitchDelta, yawDelta);
-
-            aout << "Rotating - yaw: " << yawDelta << " pitch: " << pitchDelta << std::endl;
-
-            // Update last position
-            lastTouchX = x1;
-            lastTouchY = y1;
-        }
-        else if (actionMasked == AMOTION_EVENT_ACTION_UP ||
-                 actionMasked == AMOTION_EVENT_ACTION_CANCEL) {
-            isDragging = false;
-            aout << "Single-finger drag ended" << std::endl;
-        }
-    }
+    cameraController->handleTouchInput(x1, y1, x2, y2,
+                                       pointerCount, actionMasked,
+                                       width, height);
 }
 
 void VulkanRenderer::initVulkan() {
+    initCamera();
+    
     createInstance();
     setupDebugMessenger();
     createSurface();
