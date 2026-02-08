@@ -65,6 +65,11 @@ public:
         return target;
     }
     
+    void setTarget(glm::vec3 newTarget) {
+        target = newTarget;
+        updateViewMatrix();
+    }
+    
     void setPosition(glm::vec3 newPos) {
         position = newPos;
         updateViewMatrix();

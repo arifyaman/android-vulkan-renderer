@@ -166,92 +166,132 @@ DeviceOrientation VulkanRenderer::currentTransformToOrientation(VkSurfaceTransfo
 }
 
 void VulkanRenderer::handleTouchInput(float x1, float y1, float x2, float y2, int pointerCount, int32_t actionMasked) {
-    // Calculate pinch distance if two pointers
-    float pinchDistance = 0.0f;
+    // Get screen dimensions for normalization
+    int32_t width = ANativeWindow_getWidth(app_->window);
+    int32_t height = ANativeWindow_getHeight(app_->window);
+    float maxDim = std::max(width, height);
+
+    // ========== TWO FINGER GESTURES ==========
     if (pointerCount == 2) {
+        // Calculate current pinch distance and midpoint
         float dx = x2 - x1;
         float dy = y2 - y1;
-        pinchDistance = sqrt(dx * dx + dy * dy);
-    }
-    
-    // Handle pinch gesture (two fingers)
-    if (pointerCount == 2) {
-        if (actionMasked == AMOTION_EVENT_ACTION_POINTER_DOWN && !isPinching) {
-            // Start pinching - store camera position and target
-            isPinching = true;
-            pinchStartDistance = pinchDistance;
-            pinchStartCameraPos = camera.getPosition();
-            pinchStartTargetPos = camera.getTarget();
-            
-            aout << "Pinch START - distance: " << pinchDistance << " camPos: (" 
-                 << pinchStartCameraPos.x << ", " << pinchStartCameraPos.y << ", " << pinchStartCameraPos.z << ")" << std::endl;
+        float currentDistance = sqrt(dx * dx + dy * dy);
+        glm::vec2 currentMidpoint = glm::vec2((x1 + x2) * 0.5f, (y1 + y2) * 0.5f);
+
+        if (actionMasked == AMOTION_EVENT_ACTION_POINTER_DOWN) {
+            // Initialize two-finger gesture tracking
+            lastTwoFingerDistance = currentDistance;
+            lastTwoFingerMidpoint = currentMidpoint;
+            twoFingerStartCameraPos = camera.getPosition();
+            twoFingerStartTargetPos = camera.getTarget();
+
+            aout << "Two-finger gesture started" << std::endl;
         }
-        else if (actionMasked == AMOTION_EVENT_ACTION_MOVE && isPinching) {
-            // Update zoom based on pinch distance - move camera along look-at line
-            float distanceRatio = pinchDistance / pinchStartDistance;
-            float currentDistance = glm::length(pinchStartCameraPos - pinchStartTargetPos);
-            float newDistance = currentDistance / distanceRatio;
-            
-            // Clamp distance
-            newDistance = glm::clamp(newDistance, minDistance, maxDistance);
-            
-            // Calculate direction from target to camera (normalized)
-            glm::vec3 directionToCamera = glm::normalize(pinchStartCameraPos - pinchStartTargetPos);
-            
-            // Calculate new camera position along the direction line
-            glm::vec3 newCameraPos = pinchStartTargetPos + directionToCamera * newDistance;
-            
-            camera.setPosition(newCameraPos);
-            
-            aout << "Pinch MOVE - distanceRatio: " << distanceRatio << " newDistance: " << newDistance 
-                 << " newCamPos: (" << newCameraPos.x << ", " << newCameraPos.y << ", " << newCameraPos.z << ")" << std::endl;
+        else if (actionMasked == AMOTION_EVENT_ACTION_MOVE) {
+            // Calculate deltas
+            float distanceDelta = currentDistance - lastTwoFingerDistance;
+            glm::vec2 midpointDelta = currentMidpoint - lastTwoFingerMidpoint;
+
+            // PINCH TO ZOOM - distance between fingers changed
+            if (abs(distanceDelta) > 1.0f) {  // Small threshold to avoid jitter
+                float zoomFactor = currentDistance / lastTwoFingerDistance;
+
+                // Calculate new camera distance from target
+                glm::vec3 camToTarget = camera.getTarget() - camera.getPosition();
+                float currentCamDistance = glm::length(camToTarget);
+                float newCamDistance = currentCamDistance / zoomFactor;
+
+                // Clamp distance
+                newCamDistance = glm::clamp(newCamDistance, minDistance, maxDistance);
+
+                // Move camera along view direction
+                glm::vec3 viewDir = glm::normalize(camToTarget);
+                glm::vec3 newCameraPos = camera.getTarget() - viewDir * newCamDistance;
+
+                camera.setPosition(newCameraPos);
+
+                aout << "Pinch zoom - factor: " << zoomFactor << " distance: " << newCamDistance << std::endl;
+            }
+
+            // PAN - midpoint moved (both fingers moving together)
+            float midpointMovement = glm::length(midpointDelta);
+            if (midpointMovement > 1.0f) {  // Small threshold to avoid jitter
+                // Normalize the movement
+                float normalizedDeltaX = midpointDelta.x / maxDim;
+                float normalizedDeltaY = midpointDelta.y / maxDim;
+
+                // Calculate camera coordinate system
+                glm::vec3 viewDir = glm::normalize(camera.getTarget() - camera.getPosition());
+                glm::vec3 worldUp = glm::vec3(0.0f, 0.0f, 1.0f);
+                glm::vec3 cameraRight = glm::normalize(glm::cross(viewDir, worldUp));
+                glm::vec3 cameraUp = glm::normalize(glm::cross(cameraRight, viewDir));
+
+                // Pan sensitivity scales with distance from target
+                float camDistance = glm::length(camera.getTarget() - camera.getPosition());
+                float panSensitivity = camDistance * 2.0f;
+
+                // Calculate movement in world space (inverted X for natural feel)
+                glm::vec3 panMovement = -cameraRight * (normalizedDeltaX * panSensitivity)
+                                        + cameraUp * (normalizedDeltaY * panSensitivity);
+
+                // Move both camera and target together
+                camera.setPosition(camera.getPosition() + panMovement);
+                camera.setTarget(camera.getTarget() + panMovement);
+
+                aout << "Pan - movement: (" << panMovement.x << ", " << panMovement.y << ", " << panMovement.z << ")" << std::endl;
+            }
+
+            // Update last values for next frame
+            lastTwoFingerDistance = currentDistance;
+            lastTwoFingerMidpoint = currentMidpoint;
         }
-        else if (actionMasked == AMOTION_EVENT_ACTION_POINTER_UP || 
-                 actionMasked == AMOTION_EVENT_ACTION_UP || 
+        else if (actionMasked == AMOTION_EVENT_ACTION_POINTER_UP ||
+                 actionMasked == AMOTION_EVENT_ACTION_UP ||
                  actionMasked == AMOTION_EVENT_ACTION_CANCEL) {
-            // Stop pinching
-            isPinching = false;
-            aout << "Pinch STOP" << std::endl;
+            aout << "Two-finger gesture ended" << std::endl;
         }
+
+        // Prevent single-finger drag from interfering
+        isDragging = false;
         return;
     }
-    
-    // Handle single-finger dragging (one finger)
-    if (pointerCount == 1 && !isPinching) {
-        int32_t width = ANativeWindow_getWidth(app_->window);
-        int32_t height = ANativeWindow_getHeight(app_->window);
-        float maxDim = std::max(width, height);
-        
+
+    // ========== SINGLE FINGER ROTATION ==========
+    if (pointerCount == 1) {
         if (actionMasked == AMOTION_EVENT_ACTION_DOWN) {
-            if (!isDragging) {
-                aout << "Touch START - startX: " << touchStartX << ", startY: " << touchStartY << std::endl;
-                isDragging = true;
-                touchStartX = x1;
-                touchStartY = y1;
-            }
+            isDragging = true;
+            lastTouchX = x1;
+            lastTouchY = y1;
+            aout << "Single-finger drag started" << std::endl;
         }
         else if (actionMasked == AMOTION_EVENT_ACTION_MOVE && isDragging) {
-            float deltaX = x1 - touchStartX;
-            float deltaY = y1 - touchStartY;
-            
+            // Calculate delta from last position
+            float deltaX = x1 - lastTouchX;
+            float deltaY = y1 - lastTouchY;
+
+            // Normalize to screen size
             float normalizedDeltaX = deltaX / maxDim;
             float normalizedDeltaY = deltaY / maxDim;
-            
-            float sensitivity = 5.0f;
-            float pitchDelta = normalizedDeltaY * sensitivity;
-            float yawDelta = normalizedDeltaX * sensitivity;
-            
+
+            // Apply rotation sensitivity
+            float rotationSensitivity = 3.0f;
+            float yawDelta = normalizedDeltaX * rotationSensitivity;
+            float pitchDelta = normalizedDeltaY * rotationSensitivity;
+
+            // Apply turntable rotation (orbit around target)
             camera.adjustTurntableRotation(pitchDelta, yawDelta);
-            
-            aout << "Touch DRAG - normalizedDeltaX: " << normalizedDeltaX << ", normalizedDeltaY: " << normalizedDeltaY << " pitch: " << pitchDelta << ", yaw: " << yawDelta << std::endl;
-            
-            touchStartX = x1;
-            touchStartY = y1;
+
+            aout << "Rotating - yaw: " << yawDelta << " pitch: " << pitchDelta << std::endl;
+
+            // Update last position
+            lastTouchX = x1;
+            lastTouchY = y1;
         }
-        else if (actionMasked == AMOTION_EVENT_ACTION_UP || actionMasked == AMOTION_EVENT_ACTION_CANCEL) {
-            aout << "Touch UP - was dragging: " << (isDragging ? "true" : "false") << std::endl;
+        else if (actionMasked == AMOTION_EVENT_ACTION_UP ||
+                 actionMasked == AMOTION_EVENT_ACTION_CANCEL) {
             isDragging = false;
-            isPinching = false;
+            aout << "Single-finger drag ended" << std::endl;
         }
     }
 }
