@@ -13,7 +13,7 @@ enum class DeviceOrientation {
 
 class Camera {
 public:
-    Camera(glm::vec3 position = glm::vec3(250.0f, 0.0f, 100.0f), glm::vec3 target = glm::vec3(0.0f, 0.0f, 0.0f))
+    Camera(glm::vec3 position = glm::vec3(-250.0f, 0.0f, 300.0f), glm::vec3 target = glm::vec3(0.0f, 0.0f, 80.0f))
             : target(target),
               position(position),
               currentOrientation(DeviceOrientation::Portrait0),

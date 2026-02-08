@@ -167,32 +167,33 @@ DeviceOrientation VulkanRenderer::currentTransformToOrientation(VkSurfaceTransfo
 void VulkanRenderer::handleTouchInput(float x, float y, bool isDown) {
     int32_t width = ANativeWindow_getWidth(app_->window);
     int32_t height = ANativeWindow_getHeight(app_->window);
-
-    float normalizedX = x / static_cast<float>(width);
-    float normalizedY = y / static_cast<float>(height);
-
-    aout << "Touch event - screen: (" << x << ", " << y << ") normalized: (" << normalizedX << ", " << normalizedY << ") isDown: " << (isDown ? "true" : "false") << std::endl;
+    float maxDim = std::max(width, height);
+    
+    aout << "Touch event - screen: (" << x << ", " << y << ") isDown: " << (isDown ? "true" : "false") << std::endl;
 
     if (isDown) {
         if (!isDragging) {
             aout << "  Touch START - startX: " << touchStartX << ", startY: " << touchStartY << std::endl;
             isDragging = true;
-            touchStartX = normalizedX;
-            touchStartY = normalizedY;
+            touchStartX = x;
+            touchStartY = y;
         } else {
-            float deltaX = normalizedX - touchStartX;
-            float deltaY = normalizedY - touchStartY;
+            float deltaX = x - touchStartX;
+            float deltaY = y - touchStartY;
             
-            float sensitivity = 2.0f;
-            float pitchDelta = deltaY * sensitivity;
-            float yawDelta = deltaX * sensitivity;
+            float normalizedDeltaX = deltaX / maxDim;
+            float normalizedDeltaY = deltaY / maxDim;
+            
+            float sensitivity = 5.0f;
+            float pitchDelta = normalizedDeltaY * sensitivity;
+            float yawDelta = normalizedDeltaX * sensitivity;
             
             camera.adjustTurntableRotation(pitchDelta, yawDelta);
             
-            aout << "  Touch DRAG - deltaX: " << deltaX << ", deltaY: " << deltaY << " pitch: " << pitchDelta << ", yaw: " << yawDelta << std::endl;
+            aout << "  Touch DRAG - normalizedDeltaX: " << normalizedDeltaX << ", normalizedDeltaY: " << normalizedDeltaY << " pitch: " << pitchDelta << ", yaw: " << yawDelta << std::endl;
             
-            touchStartX = normalizedX;
-            touchStartY = normalizedY;
+            touchStartX = x;
+            touchStartY = y;
         }
     } else {
         aout << "  Touch UP - was dragging: " << (isDragging ? "true" : "false") << std::endl;
