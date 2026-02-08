@@ -18,11 +18,15 @@
 class CameraController {
 public:
     CameraController(Camera& camera);
-    
+
+    void setScreenDimensions(int32_t width, int32_t height) {
+        screenWidth = width;
+        screenHeight = height;
+    }
+
     // Main touch input handler
     void handleTouchInput(float x1, float y1, float x2, float y2, 
-                         int pointerCount, int32_t actionMasked,
-                         int32_t screenWidth, int32_t screenHeight);
+                         int pointerCount, int32_t actionMasked);
     
     // Configuration
     void setDistanceLimits(float min, float max);
@@ -36,24 +40,27 @@ public:
 
 private:
     // Reference to camera (not owned)
-    Camera& camera_;
+    Camera& camera;
+
+    int32_t screenWidth;
+    int32_t screenHeight;
     
     // Touch input state
-    bool isDragging_;
-    float lastTouchX_;
-    float lastTouchY_;
-    float lastTwoFingerDistance_;
-    glm::vec2 lastTwoFingerMidpoint_;
-    glm::vec3 twoFingerStartCameraPos_;
-    glm::vec3 twoFingerStartTargetPos_;
+    bool isDragging;
+    float lastTouchX;
+    float lastTouchY;
+    float lastTwoFingerDistance;
+    glm::vec2 lastTwoFingerMidpoint;
+    glm::vec3 twoFingerStartCameraPos;
+    glm::vec3 twoFingerStartTargetPos;
     
     // Configuration
-    float minDistance_;
-    float maxDistance_;
-    float rotationSensitivity_;
-    float panSensitivityMultiplier_;
-    float zoomThreshold_;
-    float panThreshold_;
+    float minDistance;
+    float maxDistance;
+    float rotationSensitivity;
+    float panSensitivityMultiplier;
+    float zoomThreshold;
+    float panThreshold;
     
     // Helper methods
     void handleTwoFingerGesture(float x1, float y1, float x2, float y2,

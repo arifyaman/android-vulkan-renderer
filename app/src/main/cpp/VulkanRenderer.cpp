@@ -167,23 +167,19 @@ DeviceOrientation VulkanRenderer::currentTransformToOrientation(VkSurfaceTransfo
 }
 
 void VulkanRenderer::initCamera() {
-    camera.setPosition(glm::vec3(250.0f, 0.0f, 100.0f));
+    camera.setPosition(glm::vec3(-250.0f, 0.0f, 100.0f));
     camera.setTarget(glm::vec3(0.0f, 0.0f, 0.0f));
 
     cameraController = std::make_unique<CameraController>(camera);
     cameraController->setDistanceLimits(10.0f, 1000.0f);
-    cameraController->setRotationSensitivity(3.0f);
+    cameraController->setRotationSensitivity(6.0f);
     cameraController->setPanSensitivity(2.0f);
 }
 
 void VulkanRenderer::handleTouchInput(float x1, float y1, float x2, float y2, 
                                         int pointerCount, int32_t actionMasked) {
-    int32_t width = ANativeWindow_getWidth(app_->window);
-    int32_t height = ANativeWindow_getHeight(app_->window);
-
     cameraController->handleTouchInput(x1, y1, x2, y2,
-                                       pointerCount, actionMasked,
-                                       width, height);
+                                       pointerCount, actionMasked);
 }
 
 void VulkanRenderer::initVulkan() {
@@ -510,6 +506,9 @@ void VulkanRenderer::createSwapChain() {
 
     swapChainImageFormat = surfaceFormat.format;
     swapChainExtent = extent;
+
+    cameraController->setScreenDimensions(swapChainExtent.width,
+                                          swapChainExtent.height);
 }
 
 void VulkanRenderer::cleanupSwapChain() {
