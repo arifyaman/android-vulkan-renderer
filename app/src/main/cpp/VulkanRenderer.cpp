@@ -167,7 +167,7 @@ DeviceOrientation VulkanRenderer::currentTransformToOrientation(VkSurfaceTransfo
 }
 
 void VulkanRenderer::initCamera() {
-    camera.setPosition(glm::vec3(-250.0f, 0.0f, 100.0f));
+    camera.setPosition(glm::vec3(-250.0f, 0.0f, 0.0f));
     camera.setTarget(glm::vec3(0.0f, 0.0f, 0.0f));
 
     cameraController = std::make_unique<CameraController>(camera);
@@ -1016,7 +1016,7 @@ void VulkanRenderer::parseMTLFile(const std::string& mtlFilename) {
 void VulkanRenderer::loadModel() {
     auto assetManager = app_->activity->assetManager;
 
-    AAsset* asset = AAssetManager_open(assetManager, "AGirl.obj", AASSET_MODE_STREAMING);
+    AAsset* asset = AAssetManager_open(assetManager, "logo.obj", AASSET_MODE_STREAMING);
     if (!asset) {
         throw std::runtime_error("failed to open model asset!");
     }
