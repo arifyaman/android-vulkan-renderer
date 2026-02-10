@@ -84,8 +84,7 @@ private:
     static constexpr int MAX_FRAMES_IN_FLIGHT = 2;
     const std::vector<const char*> validationLayers = {"VK_LAYER_KHRONOS_validation"};
     const std::vector<const char*> deviceExtensions = {
-            VK_KHR_SWAPCHAIN_EXTENSION_NAME,
-            VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME
+            VK_KHR_SWAPCHAIN_EXTENSION_NAME
     };
 
     // Validation layers are not available on Android devices
@@ -130,6 +129,8 @@ private:
     VkImage depthImage = VK_NULL_HANDLE;
     VkDeviceMemory depthImageMemory = VK_NULL_HANDLE;
     VkImageView depthImageView = VK_NULL_HANDLE;
+    VkRenderPass renderPass = VK_NULL_HANDLE;
+    std::vector<VkFramebuffer> swapChainFramebuffers;
     uint32_t mipLevels;
 
     // Multi-texture support (Phase 1: Texture Array, Phase 2: Bindless)
@@ -167,9 +168,7 @@ private:
     // Current surface transform from Vulkan (used to determine device orientation)
     VkSurfaceTransformFlagBitsKHR currentTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
 
-    // Dynamic rendering function pointers
-    PFN_vkCmdBeginRenderingKHR vkCmdBeginRenderingKHR = nullptr;
-    PFN_vkCmdEndRenderingKHR vkCmdEndRenderingKHR = nullptr;
+
 
     // Initialization methods
     void initVulkan();
@@ -185,6 +184,8 @@ private:
     void createGraphicsPipeline();
     void createCommandPool();
     void createDepthResources();
+    void createRenderPass();
+    void createFramebuffers();
     void createTextures();
     void createTextureImages();
     void createTextureImageViews();
