@@ -1,10 +1,11 @@
 #include "VulkanRenderer.h"
 #include "AndroidOut.h"
-#include "AndroidHelper.h"
+#include "CameraController.h"
 
 #include <android/asset_manager.h>
 #include <android/native_window.h>
 #include <vulkan/vulkan_android.h>
+#include <cmath>
 
 #define STB_IMAGE_IMPLEMENTATION
 #include "lib/stb-master/stb_image.h"
@@ -31,8 +32,8 @@ VkVertexInputBindingDescription Vertex::getBindingDescription() {
     return bindingDescription;
 }
 
-std::array<VkVertexInputAttributeDescription, 3> Vertex::getAttributeDescriptions() {
-    std::array<VkVertexInputAttributeDescription, 3> attributeDescriptions{};
+std::array<VkVertexInputAttributeDescription, 4> Vertex::getAttributeDescriptions() {
+    std::array<VkVertexInputAttributeDescription, 4> attributeDescriptions{};
 
     attributeDescriptions[0].binding = 0;
     attributeDescriptions[0].location = 0;
@@ -49,6 +50,11 @@ std::array<VkVertexInputAttributeDescription, 3> Vertex::getAttributeDescription
     attributeDescriptions[2].format = VK_FORMAT_R32G32_SFLOAT;
     attributeDescriptions[2].offset = offsetof(Vertex, texCoord);
 
+    attributeDescriptions[3].binding = 0;
+    attributeDescriptions[3].location = 3;
+    attributeDescriptions[3].format = VK_FORMAT_R32_SINT;
+    attributeDescriptions[3].offset = offsetof(Vertex, texIndex);
+
     return attributeDescriptions;
 }
 
@@ -63,6 +69,7 @@ VKAPI_ATTR VkBool32 VKAPI_CALL VulkanRenderer::debugCallback(
 }
 
 VulkanRenderer::VulkanRenderer(android_app* app) : app_(app) {
+    lastFrameTime = std::chrono::high_resolution_clock::now();
     initVulkan();
 }
 
@@ -72,10 +79,18 @@ VulkanRenderer::~VulkanRenderer() {
 
         cleanupSwapChain();
 
-        if (textureSampler != VK_NULL_HANDLE) vkDestroySampler(device, textureSampler, nullptr);
-        if (textureImageView != VK_NULL_HANDLE) vkDestroyImageView(device, textureImageView, nullptr);
-        if (textureImage != VK_NULL_HANDLE) vkDestroyImage(device, textureImage, nullptr);
-        if (textureImageMemory != VK_NULL_HANDLE) vkFreeMemory(device, textureImageMemory, nullptr);
+        for (size_t i = 0; i < textureSamplers.size(); i++) {
+            if (textureSamplers[i] != VK_NULL_HANDLE) vkDestroySampler(device, textureSamplers[i], nullptr);
+        }
+        for (size_t i = 0; i < textureImageViews.size(); i++) {
+            if (textureImageViews[i] != VK_NULL_HANDLE) vkDestroyImageView(device, textureImageViews[i], nullptr);
+        }
+        for (size_t i = 0; i < textureImages.size(); i++) {
+            if (textureImages[i] != VK_NULL_HANDLE) vkDestroyImage(device, textureImages[i], nullptr);
+        }
+        for (size_t i = 0; i < textureImageMemories.size(); i++) {
+            if (textureImageMemories[i] != VK_NULL_HANDLE) vkFreeMemory(device, textureImageMemories[i], nullptr);
+        }
 
         if (depthImageView != VK_NULL_HANDLE) vkDestroyImageView(device, depthImageView, nullptr);
         if (depthImage != VK_NULL_HANDLE) vkDestroyImage(device, depthImage, nullptr);
@@ -127,8 +142,8 @@ void VulkanRenderer::render() {
 }
 
 void VulkanRenderer::updateCameraOrientation() {
-    // Get actual device orientation from Android
-    DeviceOrientation orientation = AndroidHelper::getDeviceOrientation(app_);
+    // Convert Vulkan currentTransform to device orientation
+    DeviceOrientation orientation = currentTransformToOrientation(currentTransform);
 
     camera.setOrientation(orientation);
 
@@ -137,49 +152,39 @@ void VulkanRenderer::updateCameraOrientation() {
                           static_cast<float>(swapChainExtent.height));
 }
 
-void VulkanRenderer::handleTouchInput(float x, float y, bool isDown) {
-    // Get current window dimensions
-    int32_t width = ANativeWindow_getWidth(app_->window);
-    int32_t height = ANativeWindow_getHeight(app_->window);
-
-    // Normalize to [0, 1] range based on current orientation
-    float normalizedX = x / static_cast<float>(width);
-    float normalizedY = y / static_cast<float>(height);
-
-    if (isDown) {
-        if (!isDragging) {
-            isDragging = true;
-            touchStartX = normalizedX;
-            touchStartY = normalizedY;
-            rotationAtTouchStart = currentRotation;
-        } else {
-            currentTouchX = normalizedX;
-            currentTouchY = normalizedY;
-
-            float totalDeltaX = currentTouchX - touchStartX;
-            float totalDeltaY = currentTouchY - touchStartY;
-
-            // Get camera vectors (already calculated based on orientation)
-            glm::vec3 cameraRight = camera.getRight();
-            glm::vec3 cameraUp = camera.getUp();
-
-            float rotationSpeed = 3.0f;
-
-            float angleAroundUp = totalDeltaX * rotationSpeed;
-            float angleAroundRight = totalDeltaY * rotationSpeed;
-
-            glm::quat rotationAroundUp = glm::angleAxis(angleAroundUp, cameraUp);
-            glm::quat rotationAroundRight = glm::angleAxis(angleAroundRight, cameraRight);
-
-            glm::quat deltaRotation = rotationAroundUp * rotationAroundRight;
-            targetRotation = deltaRotation * rotationAtTouchStart;
-        }
-    } else {
-        isDragging = false;
+DeviceOrientation VulkanRenderer::currentTransformToOrientation(VkSurfaceTransformFlagBitsKHR transform) {
+    switch (transform) {
+        case VK_SURFACE_TRANSFORM_ROTATE_90_BIT_KHR:
+            return DeviceOrientation::Landscape90;
+        case VK_SURFACE_TRANSFORM_ROTATE_180_BIT_KHR:
+            return DeviceOrientation::Portrait180;
+        case VK_SURFACE_TRANSFORM_ROTATE_270_BIT_KHR:
+            return DeviceOrientation::Landscape270;
+        case VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR:
+        default:
+            return DeviceOrientation::Portrait0;
     }
 }
 
+void VulkanRenderer::initCamera() {
+    camera.setPosition(glm::vec3(-250.0f, 0.0f, 0.0f));
+    camera.setTarget(glm::vec3(0.0f, 0.0f, 0.0f));
+
+    cameraController = std::make_unique<CameraController>(camera);
+    cameraController->setDistanceLimits(10.0f, 1000.0f);
+    cameraController->setRotationSensitivity(6.0f);
+    cameraController->setPanSensitivity(2.0f);
+}
+
+void VulkanRenderer::handleTouchInput(float x1, float y1, float x2, float y2, 
+                                        int pointerCount, int32_t actionMasked) {
+    cameraController->handleTouchInput(x1, y1, x2, y2,
+                                       pointerCount, actionMasked);
+}
+
 void VulkanRenderer::initVulkan() {
+    initCamera();
+    
     createInstance();
     setupDebugMessenger();
     createSurface();
@@ -201,10 +206,8 @@ void VulkanRenderer::initVulkan() {
     createGraphicsPipeline();  // Now creates dynamic rendering pipeline
     createCommandPool();
     createDepthResources();
-    createTextureImage();
-    createTextureImageView();
-    createTextureSampler();
-    loadModel();
+    loadModel();  // Load model and parse MTL file
+    createTextures();  // Load all textures, create views and samplers
     createVertexBuffer();
     createIndexBuffer();
     createUniformBuffers();
@@ -219,19 +222,70 @@ void VulkanRenderer::createInstance() {
         throw std::runtime_error("validation layers requested, but not available!");
     }
 
+    // Query and print Vulkan API version
+    uint32_t apiVersion = VK_API_VERSION_1_0;
+    auto vkEnumerateInstanceVersionPtr =
+        (PFN_vkEnumerateInstanceVersion)vkGetInstanceProcAddr(nullptr, "vkEnumerateInstanceVersion");
+
+    if (vkEnumerateInstanceVersionPtr) {
+        vkEnumerateInstanceVersionPtr(&apiVersion);
+    }
+
+    uint32_t major = VK_VERSION_MAJOR(apiVersion);
+    uint32_t minor = VK_VERSION_MINOR(apiVersion);
+    uint32_t patch = VK_VERSION_PATCH(apiVersion);
+
+    aout << "Vulkan API version available: " << major << "." << minor << "." << patch << std::endl;
+
+    uint32_t requiredVersion = VK_API_VERSION_1_2;
+    if (apiVersion < requiredVersion) {
+        aout << "Error: Vulkan " << major << "." << minor << "." << patch
+             << " is not supported. Required: Vulkan 1.2+" << std::endl;
+        throw std::runtime_error("Vulkan 1.2 or higher is required for dynamic rendering!");
+    }
+
     VkApplicationInfo appInfo{};
     appInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
     appInfo.pApplicationName = "Vulkan Android App";
     appInfo.applicationVersion = VK_MAKE_VERSION(1, 0, 0);
     appInfo.pEngineName = "No Engine";
     appInfo.engineVersion = VK_MAKE_VERSION(1, 0, 0);
-    appInfo.apiVersion = VK_API_VERSION_1_2;  // Dynamic rendering requires Vulkan 1.2+
+    appInfo.apiVersion = requiredVersion;  // Dynamic rendering requires Vulkan 1.2+
+
+    // Query and print available instance extensions
+    uint32_t availableExtensionCount = 0;
+    vkEnumerateInstanceExtensionProperties(nullptr, &availableExtensionCount, nullptr);
+    std::vector<VkExtensionProperties> availableExtensions(availableExtensionCount);
+    vkEnumerateInstanceExtensionProperties(nullptr, &availableExtensionCount, availableExtensions.data());
+
+    aout << "Available Vulkan instance extensions (" << availableExtensionCount << "):" << std::endl;
+    for (const auto& extension : availableExtensions) {
+        aout << "  - " << extension.extensionName << " (spec version: " << extension.specVersion << ")" << std::endl;
+    }
 
     VkInstanceCreateInfo createInfo{};
     createInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
     createInfo.pApplicationInfo = &appInfo;
 
     auto extensions = getRequiredExtensions();
+    aout << "\nRequired instance extensions (" << extensions.size() << "):" << std::endl;
+    for (const auto& ext : extensions) {
+        aout << "  - " << ext;
+        bool found = false;
+        for (const auto& available : availableExtensions) {
+            if (strcmp(ext, available.extensionName) == 0) {
+                found = true;
+                aout << " [AVAILABLE]";
+                break;
+            }
+        }
+        if (!found) {
+            aout << " [NOT AVAILABLE - ERROR!]";
+            throw std::runtime_error(std::string("Required extension not available: ") + ext);
+        }
+        aout << std::endl;
+    }
+
     createInfo.enabledExtensionCount = static_cast<uint32_t>(extensions.size());
     createInfo.ppEnabledExtensionNames = extensions.data();
 
@@ -305,6 +359,35 @@ void VulkanRenderer::pickPhysicalDevice() {
 void VulkanRenderer::createLogicalDevice() {
     QueueFamilyIndices indices = findQueueFamilies(physicalDevice);
 
+    // Query and print available device extensions
+    uint32_t availableExtensionCount = 0;
+    vkEnumerateDeviceExtensionProperties(physicalDevice, nullptr, &availableExtensionCount, nullptr);
+    std::vector<VkExtensionProperties> availableExtensions(availableExtensionCount);
+    vkEnumerateDeviceExtensionProperties(physicalDevice, nullptr, &availableExtensionCount, availableExtensions.data());
+
+    aout << "\nAvailable Vulkan device extensions (" << availableExtensionCount << "):" << std::endl;
+    for (const auto& extension : availableExtensions) {
+        aout << "  - " << extension.extensionName << " (spec version: " << extension.specVersion << ")" << std::endl;
+    }
+
+    aout << "\nRequired device extensions (" << deviceExtensions.size() << "):" << std::endl;
+    for (const auto& ext : deviceExtensions) {
+        aout << "  - " << ext;
+        bool found = false;
+        for (const auto& available : availableExtensions) {
+            if (strcmp(ext, available.extensionName) == 0) {
+                found = true;
+                aout << " [AVAILABLE]";
+                break;
+            }
+        }
+        if (!found) {
+            aout << " [NOT AVAILABLE - ERROR!]";
+            throw std::runtime_error(std::string("Required device extension not available: ") + ext);
+        }
+        aout << std::endl;
+    }
+
     std::vector<VkDeviceQueueCreateInfo> queueCreateInfos;
     std::set<uint32_t> uniqueQueueFamilies = {indices.graphicsFamily.value(), indices.presentFamily.value()};
 
@@ -359,6 +442,24 @@ void VulkanRenderer::createSwapChain() {
     aout << "Surface capabilities - minImageCount: " << swapChainSupport.capabilities.minImageCount
          << ", maxImageCount: " << swapChainSupport.capabilities.maxImageCount << std::endl;
 
+    // Log Vulkan pre-transform for orientation debugging
+    const char* transformName = "IDENTITY";
+    switch (swapChainSupport.capabilities.currentTransform) {
+        case VK_SURFACE_TRANSFORM_ROTATE_90_BIT_KHR: transformName = "ROTATE_90"; break;
+        case VK_SURFACE_TRANSFORM_ROTATE_180_BIT_KHR: transformName = "ROTATE_180"; break;
+        case VK_SURFACE_TRANSFORM_ROTATE_270_BIT_KHR: transformName = "ROTATE_270"; break;
+        case VK_SURFACE_TRANSFORM_HORIZONTAL_MIRROR_BIT_KHR: transformName = "HORIZONTAL_MIRROR"; break;
+        case VK_SURFACE_TRANSFORM_HORIZONTAL_MIRROR_ROTATE_90_BIT_KHR: transformName = "HORIZONTAL_MIRROR_ROTATE_90"; break;
+        case VK_SURFACE_TRANSFORM_HORIZONTAL_MIRROR_ROTATE_180_BIT_KHR: transformName = "HORIZONTAL_MIRROR_ROTATE_180"; break;
+        case VK_SURFACE_TRANSFORM_HORIZONTAL_MIRROR_ROTATE_270_BIT_KHR: transformName = "HORIZONTAL_MIRROR_ROTATE_270"; break;
+        case VK_SURFACE_TRANSFORM_INHERIT_BIT_KHR: transformName = "INHERIT"; break;
+        default: break;
+    }
+    aout << "Vulkan currentTransform: " << swapChainSupport.capabilities.currentTransform << " (" << transformName << ")" << std::endl;
+    aout << "Vulkan using preTransform: currentTransform (matches device orientation)" << std::endl;
+    aout << "  Device orientation detected from Vulkan currentTransform (not Android APIs)" << std::endl;
+    aout << "  Camera will rotate to compensate" << std::endl;
+
     VkSurfaceFormatKHR surfaceFormat = chooseSwapSurfaceFormat(swapChainSupport.formats);
     VkPresentModeKHR presentMode = chooseSwapPresentMode(swapChainSupport.presentModes);
     VkExtent2D extent = chooseSwapExtent(swapChainSupport.capabilities);
@@ -390,6 +491,7 @@ void VulkanRenderer::createSwapChain() {
     }
 
     createInfo.preTransform = swapChainSupport.capabilities.currentTransform;
+    currentTransform = swapChainSupport.capabilities.currentTransform;
     createInfo.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
     createInfo.presentMode = presentMode;
     createInfo.clipped = VK_TRUE;
@@ -404,6 +506,8 @@ void VulkanRenderer::createSwapChain() {
 
     swapChainImageFormat = surfaceFormat.format;
     swapChainExtent = extent;
+    cameraController->setScreenDimensions(swapChainExtent.width,
+                                          swapChainExtent.height);
 }
 
 void VulkanRenderer::cleanupSwapChain() {
@@ -449,7 +553,7 @@ void VulkanRenderer::createDescriptorSetLayout() {
 
     VkDescriptorSetLayoutBinding samplerLayoutBinding{};
     samplerLayoutBinding.binding = 1;
-    samplerLayoutBinding.descriptorCount = 1;
+    samplerLayoutBinding.descriptorCount = MAX_PHASE_1_TEXTURES;
     samplerLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     samplerLayoutBinding.pImmutableSamplers = nullptr;
     samplerLayoutBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
@@ -528,7 +632,7 @@ void VulkanRenderer::createGraphicsPipeline() {
     rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
     rasterizer.lineWidth = 1.0f;
     rasterizer.cullMode = VK_CULL_MODE_BACK_BIT;
-    rasterizer.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    rasterizer.frontFace = VK_FRONT_FACE_CLOCKWISE;  // Changed from COUNTER_CLOCKWISE to match OBJ winding
     rasterizer.depthBiasEnable = VK_FALSE;
 
     VkPipelineMultisampleStateCreateInfo multisampling{};
@@ -639,12 +743,13 @@ void VulkanRenderer::createDepthResources() {
     depthImageView = createImageView(depthImage, depthFormat, aspectFlags, 1);
 }
 
-void VulkanRenderer::createTextureImage() {
+void VulkanRenderer::loadSingleTexture(const std::string& filename, int textureIndex) {
     auto assetManager = app_->activity->assetManager;
 
-    AAsset* asset = AAssetManager_open(assetManager, "viking_room.png", AASSET_MODE_STREAMING);
+    AAsset* asset = AAssetManager_open(assetManager, filename.c_str(), AASSET_MODE_STREAMING);
     if (!asset) {
-        throw std::runtime_error("failed to open texture asset!");
+        aout << "Warning: Could not open texture file: " << filename << std::endl;
+        return;
     }
 
     size_t assetLength = AAsset_getLength(asset);
@@ -655,13 +760,14 @@ void VulkanRenderer::createTextureImage() {
     int texWidth, texHeight, texChannels;
     stbi_uc* pixels = stbi_load_from_memory(assetData.data(), assetLength, &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
     VkDeviceSize imageSize = texWidth * texHeight * 4;
-    // Disable mipmaps for better performance on mobile
-    mipLevels = 1;
-    aout << "Mipmaps disabled for mobile performance" << std::endl;
 
     if (!pixels) {
-        throw std::runtime_error("failed to load texture image!");
+        aout << "Warning: Failed to load texture: " << filename << std::endl;
+        return;
     }
+
+    aout << "Loading texture [" << textureIndex << "]: " << filename
+         << " (" << texWidth << "x" << texHeight << ")" << std::endl;
 
     VkBuffer stagingBuffer;
     VkDeviceMemory stagingBufferMemory;
@@ -676,26 +782,106 @@ void VulkanRenderer::createTextureImage() {
 
     stbi_image_free(pixels);
 
-    createImage(texWidth, texHeight, mipLevels, VK_SAMPLE_COUNT_1_BIT, VK_FORMAT_R8G8B8A8_SRGB,
-                VK_IMAGE_TILING_OPTIMAL,
-                VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, textureImage, textureImageMemory);
+    VkImage image;
+    VkDeviceMemory imageMemory;
 
-    transitionImageLayout(textureImage, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_LAYOUT_UNDEFINED,
-                          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, mipLevels);
-    copyBufferToImage(stagingBuffer, textureImage, static_cast<uint32_t>(texWidth), static_cast<uint32_t>(texHeight));
+    createImage(texWidth, texHeight, 1, VK_SAMPLE_COUNT_1_BIT, VK_FORMAT_R8G8B8A8_SRGB,
+                VK_IMAGE_TILING_OPTIMAL,
+                VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, image, imageMemory);
+
+    transitionImageLayout(image, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_LAYOUT_UNDEFINED,
+                          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1);
+    copyBufferToImage(stagingBuffer, image, static_cast<uint32_t>(texWidth), static_cast<uint32_t>(texHeight));
 
     vkDestroyBuffer(device, stagingBuffer, nullptr);
     vkFreeMemory(device, stagingBufferMemory, nullptr);
 
-    generateMipmaps(textureImage, VK_FORMAT_R8G8B8A8_SRGB, texWidth, texHeight, mipLevels);
+    transitionImageLayout(image, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, 1);
+
+    textureImages.push_back(image);
+    textureImageMemories.push_back(imageMemory);
 }
 
-void VulkanRenderer::createTextureImageView() {
-    textureImageView = createImageView(textureImage, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_ASPECT_COLOR_BIT, mipLevels);
-}
+void VulkanRenderer::createTextures() {
+    aout << "Creating textures for " << materialToTextureFile.size() << " materials" << std::endl;
 
-void VulkanRenderer::createTextureSampler() {
+    // Build a map from texture filename to array index
+    std::map<std::string, int> textureFileToIndex;
+    
+    // Get all unique texture filenames from materials (sorted for consistent ordering)
+    std::set<std::string> textureFilenames;
+    for (const auto& pair : materialToTextureFile) {
+        textureFilenames.insert(pair.second);
+        aout << "Material " << pair.first << " -> " << pair.second << std::endl;
+    }
+
+    // For Phase 1, ensure we don't exceed MAX_PHASE_1_TEXTURES
+    if (textureFilenames.size() > MAX_PHASE_1_TEXTURES) {
+        throw std::runtime_error("Too many textures for Phase 1! Use Phase 2 (Bindless) for 100+ textures.");
+    }
+
+    aout << "Total unique textures to load: " << textureFilenames.size() << std::endl;
+
+    // Load all textures and build filename->index mapping
+    int index = 0;
+    for (const auto& filename : textureFilenames) {
+        loadSingleTexture(filename, index);
+        textureFileToIndex[filename] = index;
+        index++;
+    }
+
+    numTextures = index;
+    aout << "Loaded " << numTextures << " texture images" << std::endl;
+
+    // Build old index to new index mapping before updating materialToTextureIndex
+    std::unordered_map<int, int> oldToNewIndexMap;
+    for (const auto& pair : materialToTextureIndex) {
+        const std::string& materialName = pair.first;
+        int oldIndex = pair.second;
+        if (materialToTextureFile.count(materialName)) {
+            const std::string& textureFile = materialToTextureFile[materialName];
+            int newIndex = textureFileToIndex[textureFile];
+            oldToNewIndexMap[oldIndex] = newIndex;
+        }
+    }
+
+    // Update materialToTextureIndex to use the correct array indices
+    for (auto& pair : materialToTextureIndex) {
+        const std::string& materialName = pair.first;
+        if (materialToTextureFile.count(materialName)) {
+            const std::string& textureFile = materialToTextureFile[materialName];
+            pair.second = textureFileToIndex[textureFile];
+            aout << "Updated material " << materialName << " -> texture index " << pair.second 
+                 << " (file: " << textureFile << ")" << std::endl;
+        }
+    }
+
+    // Update all vertex texture indices that were created with old indices
+    aout << "Remapping vertex texture indices..." << std::endl;
+    for (auto& vertex : vertices) {
+        if (oldToNewIndexMap.count(vertex.texIndex)) {
+            int oldIdx = vertex.texIndex;
+            vertex.texIndex = oldToNewIndexMap[oldIdx];
+            if (oldIdx != vertex.texIndex) {
+                static int remapCount = 0;
+                if (remapCount < 5) {  // Log first few remappings
+                    aout << "  Vertex texIndex remapped: " << oldIdx << " -> " << vertex.texIndex << std::endl;
+                    remapCount++;
+                }
+            }
+        }
+    }
+    aout << "Vertex texture index remapping complete" << std::endl;
+
+    // Create image views
+    for (size_t i = 0; i < textureImages.size(); i++) {
+        textureImageViews.push_back(createImageView(textureImages[i], VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_ASPECT_COLOR_BIT, 1));
+    }
+    aout << "Created " << textureImageViews.size() << " texture image views" << std::endl;
+
+    // Create samplers (one per texture for Phase 1)
     VkPhysicalDeviceProperties properties{};
     vkGetPhysicalDeviceProperties(physicalDevice, &properties);
 
@@ -714,18 +900,122 @@ void VulkanRenderer::createTextureSampler() {
     samplerInfo.compareOp = VK_COMPARE_OP_ALWAYS;
     samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
     samplerInfo.minLod = 0.0f;
-    samplerInfo.maxLod = VK_LOD_CLAMP_NONE;
+    samplerInfo.maxLod = 0.0f;
     samplerInfo.mipLodBias = 0.0f;
 
-    if (vkCreateSampler(device, &samplerInfo, nullptr, &textureSampler) != VK_SUCCESS) {
-        throw std::runtime_error("failed to create texture sampler!");
+    for (size_t i = 0; i < numTextures; i++) {
+        VkSampler sampler;
+        if (vkCreateSampler(device, &samplerInfo, nullptr, &sampler) != VK_SUCCESS) {
+            throw std::runtime_error("failed to create texture sampler!");
+        }
+        textureSamplers.push_back(sampler);
+    }
+    aout << "Created " << textureSamplers.size() << " texture samplers" << std::endl;
+}
+
+void VulkanRenderer::createTextureImages() {
+    // Phase 1: Handled in createTextures()
+    // Phase 2 (Bindless): Will have separate texture loading
+}
+
+void VulkanRenderer::createTextureImageViews() {
+    // Phase 1: Handled in createTextures()
+    // Phase 2 (Bindless): Will have separate view creation
+}
+
+void VulkanRenderer::createTextureSamplers() {
+    // Phase 1: Handled in createTextures()
+    // Phase 2 (Bindless): Will use single sampler with multiple textures
+}
+
+void VulkanRenderer::parseMTLFile(const std::string& mtlFilename) {
+    auto assetManager = app_->activity->assetManager;
+
+    AAsset* asset = AAssetManager_open(assetManager, mtlFilename.c_str(), AASSET_MODE_STREAMING);
+    if (!asset) {
+        aout << "Warning: Could not open MTL file: " << mtlFilename << std::endl;
+        return;
+    }
+
+    size_t assetLength = AAsset_getLength(asset);
+    std::string mtlData(assetLength, '\0');
+    AAsset_read(asset, mtlData.data(), assetLength);
+    AAsset_close(asset);
+
+    std::istringstream stream(mtlData);
+    std::string line;
+    std::string currentMaterial;
+
+    aout << "Parsing MTL file: " << mtlFilename << std::endl;
+
+    while (std::getline(stream, line)) {
+        std::istringstream lineStream(line);
+        std::string token;
+        lineStream >> token;
+
+        if (token == "newmtl") {
+            lineStream >> currentMaterial;
+            aout << "Found material: " << currentMaterial << std::endl;
+        } else if (token == "map_Kd" || token == "map_Ka") {
+            std::string textureFile;
+            lineStream >> textureFile;
+
+            // Material might not have explicit texture in MTL, infer from naming
+            if (textureFile.empty()) {
+                // Try to infer texture name from material name
+                // Material: "lambert5SG.001" -> "lambert5SG_baseColor.png"
+                std::string inferredTexture = currentMaterial;
+
+                // Remove .001 suffix if present
+                size_t dotPos = currentMaterial.find('.');
+                if (dotPos != std::string::npos) {
+                    inferredTexture = currentMaterial.substr(0, dotPos);
+                }
+
+                inferredTexture += "_baseColor.png";
+                materialToTextureFile[currentMaterial] = inferredTexture;
+                aout << "No explicit texture for " << currentMaterial << ", inferred: " << inferredTexture << std::endl;
+            } else {
+                materialToTextureFile[currentMaterial] = textureFile;
+                aout << "Material " << currentMaterial << " -> texture: " << textureFile << std::endl;
+            }
+        }
+    }
+
+    // Also check if materials without explicit textures should try inferred names
+    // First scan all materials in the MTL
+    stream.clear();
+    stream.seekg(0);
+    std::set<std::string> allMaterials;
+    while (std::getline(stream, line)) {
+        std::istringstream lineStream(line);
+        std::string token;
+        lineStream >> token;
+        if (token == "newmtl") {
+            lineStream >> currentMaterial;
+            allMaterials.insert(currentMaterial);
+        }
+    }
+
+    // For materials without texture reference, try inferred names
+    for (const auto& material : allMaterials) {
+        if (materialToTextureFile.find(material) == materialToTextureFile.end()) {
+            std::string inferredTexture = material;
+            size_t dotPos = material.find('.');
+            if (dotPos != std::string::npos) {
+                inferredTexture = material.substr(0, dotPos);
+            }
+            inferredTexture += "_baseColor.png";
+            materialToTextureFile[material] = inferredTexture;
+            aout << "Inferred texture for " << material << ": " << inferredTexture << std::endl;
+        }
     }
 }
 
 void VulkanRenderer::loadModel() {
     auto assetManager = app_->activity->assetManager;
 
-    AAsset* asset = AAssetManager_open(assetManager, "viking_room.obj", AASSET_MODE_STREAMING);
+    AAsset* asset = AAssetManager_open(assetManager, "logo.obj", AASSET_MODE_STREAMING);
     if (!asset) {
         throw std::runtime_error("failed to open model asset!");
     }
@@ -735,34 +1025,142 @@ void VulkanRenderer::loadModel() {
     AAsset_read(asset, assetData.data(), assetLength);
     AAsset_close(asset);
 
+    // Find MTL file reference and parse OBJ manually to get material assignments
+    std::string mtlFilename;
+    std::istringstream objStream(std::string(assetData.begin(), assetData.end()));
+    std::string line;
+
+    // First pass: Find MTL file
+    std::istringstream objStream2(std::string(assetData.begin(), assetData.end()));
+    while (std::getline(objStream2, line)) {
+        std::istringstream lineStream(line);
+        std::string token;
+        lineStream >> token;
+        if (token == "mtllib") {
+            lineStream >> mtlFilename;
+            break;
+        }
+    }
+
+    // Parse MTL file to get material-to-texture mapping
+    if (!mtlFilename.empty()) {
+        parseMTLFile(mtlFilename);
+    }
+
+    // Use tinyobj_loader for geometry, then apply materials from usemtl statements
     tinyobj::attrib_t attrib;
     std::vector<tinyobj::shape_t> shapes;
     std::vector<tinyobj::material_t> materials;
     std::string err;
 
-    std::istringstream stream(std::string(assetData.begin(), assetData.end()));
-    if (!tinyobj::LoadObj(&attrib, &shapes, &materials, &err, &stream, nullptr)) {
+    objStream.clear();
+    objStream.seekg(0);
+
+    if (!tinyobj::LoadObj(&attrib, &shapes, &materials, &err, &objStream, nullptr)) {
         throw std::runtime_error(err);
     }
 
+    // Parse OBJ file again to find usemtl statements and their positions
+    struct FaceWithMaterial {
+        int v1, v2, v3;
+        int vt1, vt2, vt3;
+        int matId;
+    };
+    std::vector<FaceWithMaterial> faces;
+
+    std::istringstream objStream3(std::string(assetData.begin(), assetData.end()));
+    std::string currentMaterialName = "";
+    int currentMatId = 0;
+
+    aout << "Parsing OBJ for material assignments..." << std::endl;
+
+    while (std::getline(objStream3, line)) {
+        if (line.empty() || line[0] == '#') continue;
+
+        std::istringstream lineStream(line);
+        std::string token;
+        lineStream >> token;
+
+        if (token == "usemtl") {
+            lineStream >> currentMaterialName;
+            // Find texture index for this material
+            if (materialToTextureIndex.find(currentMaterialName) == materialToTextureIndex.end()) {
+                int newIndex = materialToTextureIndex.size();
+                materialToTextureIndex[currentMaterialName] = newIndex;
+                aout << "New material from usemtl: " << currentMaterialName << " -> texture index: " << newIndex << std::endl;
+            }
+            currentMatId = materialToTextureIndex[currentMaterialName];
+        } else if (token == "f") {
+            // Parse face: f v1/vt1/vn1 v2/vt2/vn2 v3/vt3/vn3
+            FaceWithMaterial face;
+            face.matId = currentMatId;
+
+            std::string part;
+            int component = 0;
+
+            while (lineStream >> part && component < 3) {
+                // Parse v/vt/vn
+                std::istringstream partStream(part);
+                std::string indexStr;
+                int v = -1, vt = -1, vn = -1;
+
+                if (std::getline(partStream, indexStr, '/') && !indexStr.empty()) {
+                    v = std::stoi(indexStr);
+                }
+                if (std::getline(partStream, indexStr, '/') && !indexStr.empty()) {
+                    vt = std::stoi(indexStr);
+                }
+                if (std::getline(partStream, indexStr, '/') && !indexStr.empty()) {
+                    vn = std::stoi(indexStr);
+                }
+
+                if (component == 0) { face.v1 = v; face.vt1 = vt; }
+                else if (component == 1) { face.v2 = v; face.vt2 = vt; }
+                else if (component == 2) { face.v3 = v; face.vt3 = vt; }
+
+                component++;
+            }
+
+            // OBJ indices are 1-based, convert to 0-based
+            face.v1--; face.v2--; face.v3--;
+            face.vt1--; face.vt2--; face.vt3--;
+
+            // Only add face if we got valid indices
+            if (face.v1 >= 0 && face.v2 >= 0 && face.v3 >= 0) {
+                faces.push_back(face);
+            }
+        }
+    }
+
+    aout << "Parsed " << faces.size() << " faces with material assignments" << std::endl;
+    aout << "Total materials found: " << materialToTextureIndex.size() << std::endl;
+
     std::unordered_map<Vertex, uint32_t> uniqueVertices{};
 
-    for (const auto& shape : shapes) {
-        for (const auto& index : shape.mesh.indices) {
+    for (const auto& face : faces) {
+        for (int i = 0; i < 3; i++) {
+            int vi = (i == 0) ? face.v1 : (i == 1 ? face.v2 : face.v3);
+            int vti = (i == 0) ? face.vt1 : (i == 1 ? face.vt2 : face.vt3);
+
             Vertex vertex{};
 
-            vertex.pos = {
-                    attrib.vertices[3 * index.vertex_index + 0],
-                    attrib.vertices[3 * index.vertex_index + 1],
-                    attrib.vertices[3 * index.vertex_index + 2]
-            };
+            if (vi >= 0 && vi * 3 + 2 < attrib.vertices.size()) {
+                vertex.pos = {
+                    attrib.vertices[3 * vi + 0],
+                    -attrib.vertices[3 * vi + 1],
+                    attrib.vertices[3 * vi + 2]
+                };
+            }
 
-            vertex.texCoord = {
-                    attrib.texcoords[2 * index.texcoord_index + 0],
-                    1.0f - attrib.texcoords[2 * index.texcoord_index + 1]
-            };
+            if (vti >= 0 && vti * 2 + 1 < attrib.texcoords.size()) {
+                vertex.texCoord = {
+                    attrib.texcoords[2 * vti + 0],
+                    1.0f - attrib.texcoords[2 * vti + 1]
+                };
+            }
 
             vertex.color = {1.0f, 1.0f, 1.0f};
+            vertex.texIndex = face.matId;
 
             if (uniqueVertices.count(vertex) == 0) {
                 uniqueVertices[vertex] = static_cast<uint32_t>(vertices.size());
@@ -771,6 +1169,25 @@ void VulkanRenderer::loadModel() {
 
             indices.push_back(uniqueVertices[vertex]);
         }
+    }
+
+    aout << "Loaded " << vertices.size() << " vertices, " << indices.size() << " indices" << std::endl;
+    aout << "Total materials: " << materialToTextureIndex.size() << std::endl;
+    
+    // Calculate and log model bounds
+    if (!vertices.empty()) {
+        glm::vec3 minBounds(FLT_MAX);
+        glm::vec3 maxBounds(-FLT_MAX);
+        for (const auto& vertex : vertices) {
+            minBounds = glm::min(minBounds, vertex.pos);
+            maxBounds = glm::max(maxBounds, vertex.pos);
+        }
+        glm::vec3 center = (minBounds + maxBounds) * 0.5f;
+        glm::vec3 size = maxBounds - minBounds;
+        aout << "Model bounds - Min: (" << minBounds.x << ", " << minBounds.y << ", " << minBounds.z << ")" << std::endl;
+        aout << "Model bounds - Max: (" << maxBounds.x << ", " << maxBounds.y << ", " << maxBounds.z << ")" << std::endl;
+        aout << "Model center: (" << center.x << ", " << center.y << ", " << center.z << ")" << std::endl;
+        aout << "Model size: (" << size.x << ", " << size.y << ", " << size.z << ")" << std::endl;
     }
 }
 
@@ -837,11 +1254,13 @@ void VulkanRenderer::createUniformBuffers() {
 }
 
 void VulkanRenderer::createDescriptorPool() {
+    // Phase 1: Allocate for MAX_PHASE_1_TEXTURES textures
+    // Phase 2 (Bindless): Will need much larger pool
     std::array<VkDescriptorPoolSize, 2> poolSizes{};
     poolSizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     poolSizes[0].descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
     poolSizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    poolSizes[1].descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
+    poolSizes[1].descriptorCount = static_cast<uint32_t>(MAX_PHASE_1_TEXTURES * MAX_FRAMES_IN_FLIGHT);
 
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -852,6 +1271,7 @@ void VulkanRenderer::createDescriptorPool() {
     if (vkCreateDescriptorPool(device, &poolInfo, nullptr, &descriptorPool) != VK_SUCCESS) {
         throw std::runtime_error("failed to create descriptor pool!");
     }
+    aout << "Created descriptor pool with capacity for " << MAX_PHASE_1_TEXTURES << " textures" << std::endl;
 }
 
 void VulkanRenderer::createDescriptorSets() {
@@ -873,31 +1293,41 @@ void VulkanRenderer::createDescriptorSets() {
         bufferInfo.offset = 0;
         bufferInfo.range = sizeof(UniformBufferObject);
 
-        VkDescriptorImageInfo imageInfo{};
-        imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        imageInfo.imageView = textureImageView;
-        imageInfo.sampler = textureSampler;
+        std::vector<VkDescriptorImageInfo> textureInfos;
 
-        std::array<VkWriteDescriptorSet, 2> descriptorWrites{};
+        for (size_t t = 0; t < numTextures && t < MAX_PHASE_1_TEXTURES; t++) {
+            VkDescriptorImageInfo imageInfo{};
+            imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            imageInfo.imageView = textureImageViews[t];
+            imageInfo.sampler = textureSamplers[t];
+            textureInfos.push_back(imageInfo);
+        }
 
-        descriptorWrites[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        descriptorWrites[0].dstSet = descriptorSets[i];
-        descriptorWrites[0].dstBinding = 0;
-        descriptorWrites[0].dstArrayElement = 0;
-        descriptorWrites[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-        descriptorWrites[0].descriptorCount = 1;
-        descriptorWrites[0].pBufferInfo = &bufferInfo;
+        std::vector<VkWriteDescriptorSet> descriptorWrites;
 
-        descriptorWrites[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        descriptorWrites[1].dstSet = descriptorSets[i];
-        descriptorWrites[1].dstBinding = 1;
-        descriptorWrites[1].dstArrayElement = 0;
-        descriptorWrites[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        descriptorWrites[1].descriptorCount = 1;
-        descriptorWrites[1].pImageInfo = &imageInfo;
+        VkWriteDescriptorSet uboWrite{};
+        uboWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        uboWrite.dstSet = descriptorSets[i];
+        uboWrite.dstBinding = 0;
+        uboWrite.dstArrayElement = 0;
+        uboWrite.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        uboWrite.descriptorCount = 1;
+        uboWrite.pBufferInfo = &bufferInfo;
+        descriptorWrites.push_back(uboWrite);
+
+        VkWriteDescriptorSet textureWrite{};
+        textureWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        textureWrite.dstSet = descriptorSets[i];
+        textureWrite.dstBinding = 1;
+        textureWrite.dstArrayElement = 0;
+        textureWrite.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        textureWrite.descriptorCount = static_cast<uint32_t>(textureInfos.size());
+        textureWrite.pImageInfo = textureInfos.data();
+        descriptorWrites.push_back(textureWrite);
 
         vkUpdateDescriptorSets(device, static_cast<uint32_t>(descriptorWrites.size()), descriptorWrites.data(), 0, nullptr);
     }
+    aout << "Created descriptor sets with " << numTextures << " textures" << std::endl;
 }
 
 void VulkanRenderer::createCommandBuffers() {
@@ -938,18 +1368,23 @@ void VulkanRenderer::createSyncObjects() {
 void VulkanRenderer::drawFrame() {
     // FPS counter
     static auto lastTime = std::chrono::high_resolution_clock::now();
+    static auto lastFpsTime = lastTime;
     static int frameCount = 0;
     frameCount++;
 
     auto currentTime = std::chrono::high_resolution_clock::now();
     float deltaTime = std::chrono::duration<float>(currentTime - lastTime).count();
+    lastTime = currentTime;
 
-    if (deltaTime >= 1.0f) {
-        float fps = frameCount / deltaTime;
+    if (std::chrono::duration<float>(currentTime - lastFpsTime).count() >= 1.0f) {
+        float fps = frameCount / std::chrono::duration<float>(currentTime - lastFpsTime).count();
         aout << "FPS: " << fps << std::endl;
         frameCount = 0;
-        lastTime = currentTime;
+        lastFpsTime = currentTime;
     }
+    
+    // Update camera damping for smooth rotation (FPS-independent)
+    camera.updateTurntableDamping(deltaTime);
 
     vkWaitForFences(device, 1, &inFlightFences[currentFrame], VK_TRUE, UINT64_MAX);
 
@@ -957,6 +1392,7 @@ void VulkanRenderer::drawFrame() {
     VkResult result = vkAcquireNextImageKHR(device, swapChain, UINT64_MAX, imageAvailableSemaphores[currentFrame], VK_NULL_HANDLE, &imageIndex);
 
     if (result == VK_ERROR_OUT_OF_DATE_KHR) {
+        aout << "vkAcquireNextImageKHR recreateSwapChain" << std::endl;
         recreateSwapChain();
         return;
     } else if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) {
@@ -1002,12 +1438,12 @@ void VulkanRenderer::drawFrame() {
     result = vkQueuePresentKHR(presentQueue, &presentInfo);
 
     if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR || framebufferResized) {
+        aout << "vkQueuePresentKHR recreateSwapChain" << std::endl;
         framebufferResized = false;
         recreateSwapChain();
     } else if (result != VK_SUCCESS) {
         throw std::runtime_error("failed to present swap chain image!");
     }
-
     currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
 }
 
@@ -1018,6 +1454,32 @@ void VulkanRenderer::recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t
     if (vkBeginCommandBuffer(commandBuffer, &beginInfo) != VK_SUCCESS) {
         throw std::runtime_error("failed to begin recording command buffer!");
     }
+
+    // Transition swapchain image to COLOR_ATTACHMENT_OPTIMAL for rendering
+    VkImageMemoryBarrier imageBarrierToColor{};
+    imageBarrierToColor.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    imageBarrierToColor.srcAccessMask = 0;
+    imageBarrierToColor.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    imageBarrierToColor.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    imageBarrierToColor.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    imageBarrierToColor.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    imageBarrierToColor.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    imageBarrierToColor.image = swapChainImages[imageIndex];
+    imageBarrierToColor.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    imageBarrierToColor.subresourceRange.baseMipLevel = 0;
+    imageBarrierToColor.subresourceRange.levelCount = 1;
+    imageBarrierToColor.subresourceRange.baseArrayLayer = 0;
+    imageBarrierToColor.subresourceRange.layerCount = 1;
+
+    vkCmdPipelineBarrier(
+        commandBuffer,
+        VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+        0,
+        0, nullptr,
+        0, nullptr,
+        1, &imageBarrierToColor
+    );
 
     // Dynamic rendering: Prepare color attachment
     VkRenderingAttachmentInfoKHR colorAttachment{};
@@ -1081,10 +1543,43 @@ void VulkanRenderer::recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t
 
     vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 1, &descriptorSets[currentFrame], 0, nullptr);
 
+    // Log draw info once
+    static bool logged = false;
+    if (!logged) {
+        aout << "Drawing " << indices.size() << " indices, " << vertices.size() << " vertices" << std::endl;
+        logged = true;
+    }
+
     vkCmdDrawIndexed(commandBuffer, static_cast<uint32_t>(indices.size()), 1, 0, 0, 0);
 
     // Dynamic rendering: End rendering
     vkCmdEndRenderingKHR(commandBuffer);
+
+    // Transition swapchain image to PRESENT_SRC for presentation
+    VkImageMemoryBarrier imageBarrierToPresent{};
+    imageBarrierToPresent.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    imageBarrierToPresent.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    imageBarrierToPresent.dstAccessMask = 0;
+    imageBarrierToPresent.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    imageBarrierToPresent.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+    imageBarrierToPresent.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    imageBarrierToPresent.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    imageBarrierToPresent.image = swapChainImages[imageIndex];
+    imageBarrierToPresent.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    imageBarrierToPresent.subresourceRange.baseMipLevel = 0;
+    imageBarrierToPresent.subresourceRange.levelCount = 1;
+    imageBarrierToPresent.subresourceRange.baseArrayLayer = 0;
+    imageBarrierToPresent.subresourceRange.layerCount = 1;
+
+    vkCmdPipelineBarrier(
+        commandBuffer,
+        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+        VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+        0,
+        0, nullptr,
+        0, nullptr,
+        1, &imageBarrierToPresent
+    );
 
     if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS) {
         throw std::runtime_error("failed to record command buffer!");
@@ -1092,23 +1587,15 @@ void VulkanRenderer::recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t
 }
 
 void VulkanRenderer::updateUniformBuffer(uint32_t currentImage) {
-    // Frame-rate independent slerp (locked to 60 FPS behavior)
-    static auto lastUpdateTime = std::chrono::high_resolution_clock::now();
     auto currentTime = std::chrono::high_resolution_clock::now();
-    float deltaTime = std::chrono::duration<float>(currentTime - lastUpdateTime).count();
-    lastUpdateTime = currentTime;
+    float deltaTime = std::chrono::duration<float>(currentTime - lastFrameTime).count();
+    lastFrameTime = currentTime;
 
-    // Base slerp speed for 60 FPS (1/60 = 0.0167 seconds per frame)
-    float baseSlerpSpeed = 0.1f; // Speed at 60 FPS
-    // Normalize to 60 FPS: multiply by deltaTime * 60
-    float slerpFactor = glm::clamp(baseSlerpSpeed * deltaTime * 60.0f, 0.0f, 1.0f);
-    currentRotation = glm::slerp(currentRotation, targetRotation, slerpFactor);
+    //camera.updateOrbitAnimation(deltaTime);
 
     UniformBufferObject ubo{};
-    // Use quaternion rotation from touch input
-    ubo.model = glm::mat4_cast(currentRotation);
+    ubo.model = glm::mat4(1.0f);
 
-    // Get pre-calculated matrices from camera
     ubo.view = camera.getViewMatrix();
     ubo.proj = camera.getProjectionMatrix();
 

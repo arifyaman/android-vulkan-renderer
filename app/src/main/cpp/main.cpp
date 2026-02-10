@@ -4,8 +4,6 @@
 #include "VulkanRenderer.h"
 #include "AndroidHelper.h"
 
-static WindowResizeState g_resizeState;
-
 extern "C"
 {
 
@@ -19,22 +17,18 @@ extern "C"
         {
             int32_t action = AMotionEvent_getAction(event);
             int32_t actionMasked = action & AMOTION_EVENT_ACTION_MASK;
+            int32_t pointerIndex = (action & AMOTION_EVENT_ACTION_POINTER_INDEX_MASK) >> 
+                                  AMOTION_EVENT_ACTION_POINTER_INDEX_SHIFT;
+            int32_t pointerCount = AMotionEvent_getPointerCount(event);
 
-            float x = AMotionEvent_getX(event, 0);
-            float y = AMotionEvent_getY(event, 0);
+            // Get pointer coordinates
+            float x1 = AMotionEvent_getX(event, 0);
+            float y1 = AMotionEvent_getY(event, 0);
+            float x2 = (pointerCount >= 2) ? AMotionEvent_getX(event, 1) : 0.0f;
+            float y2 = (pointerCount >= 2) ? AMotionEvent_getY(event, 1) : 0.0f;
 
-            if (actionMasked == AMOTION_EVENT_ACTION_DOWN ||
-                actionMasked == AMOTION_EVENT_ACTION_MOVE)
-            {
-                pRenderer->handleTouchInput(x, y, true);
-                return 1;
-            }
-            else if (actionMasked == AMOTION_EVENT_ACTION_UP ||
-                     actionMasked == AMOTION_EVENT_ACTION_CANCEL)
-            {
-                pRenderer->handleTouchInput(x, y, false);
-                return 1;
-            }
+            pRenderer->handleTouchInput(x1, y1, x2, y2, pointerCount, actionMasked);
+            return 1;
         }
         return 0;
     }
@@ -44,7 +38,7 @@ extern "C"
      */
     static void handle_cmd(android_app *app, int32_t cmd)
     {
-        AndroidHelper::handleCommand(app, cmd, g_resizeState);
+        AndroidHelper::handleCommand(app, cmd);
     }
 
     /*!

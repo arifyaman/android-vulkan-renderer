@@ -11,7 +11,9 @@ add_library(myapplication SHARED
         main.cpp
         AndroidOut.cpp
         AndroidHelper.cpp
-        VulkanRenderer.cpp)
+        VulkanRenderer.cpp
+        CameraController.cpp
+)
 
 # Import native_app_glue for NativeActivity support
 add_library(native_app_glue STATIC
