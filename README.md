@@ -1,19 +1,40 @@
 # Android Vulkan Renderer
 
-High-performance Vulkan renderer for Android using NativeActivity. Renders the classic Viking Room 3D model with touch-based rotation controls.
+High-performance Vulkan renderer for Android using NativeActivity. Renders high-polygon 3D models with multi-touch camera controls.
+
+![Image Strip Example](demo/demo.png)
 
 ## Features
 
 - **Native Vulkan Rendering**: Direct Vulkan API 1.0 implementation for Android
 - **High Performance**: Achieves 850-1050 FPS on 120Hz devices (Mali GPU)
 - **NativeActivity**: Direct window access without GameActivity overhead
-- **Touch Controls**: Intuitive drag-to-rotate with quaternion slerp interpolation (X & Z axes)
-- **Mobile Optimized**: 
-  - MSAA disabled for performance
-  - Mipmaps disabled
-  - Mailbox present mode for lowest latency
+- **Multi-Touch Controls**:
+    - **Drag**: Rotate camera with quaternion slerp interpolation (X & Z axes)
+    - **Pinch**: Zoom in/out
+    - **Pan (2-finger)**: Translate camera position
+- **Mobile Optimized**:
+    - MSAA disabled for performance
+    - Mipmaps disabled
+    - Mailbox present mode for lowest latency
 - **3D Model Loading**: OBJ model support via tiny_obj_loader
 - **Texture Mapping**: STB image library for texture loading
+- **High Poly Support**: Renders complex models (50k triangles / 25k vertices)
+
+## Current Model
+
+**Default**: `logo.obj`
+- Triangles: 50,000
+- Vertices: 25,000
+- Rendered as single mesh object
+
+**Alternative**: `AGirl.obj`
+- High-detail character model
+- CC Attribution License
+- Creator: [Kensyouen](https://sketchfab.com/Kensyouen)
+- Source: [Sketchfab - Just a Girl](https://sketchfab.com/3d-models/just-a-girl-b2359160a4f54e76b5ae427a55d9594d)
+
+To switch models, update the filename in `VulkanRenderer.cpp` (```loadModel``` method).
 
 ## Tech Stack
 
@@ -50,45 +71,45 @@ High-performance Vulkan renderer for Android using NativeActivity. Renders the c
 ## Build Instructions
 
 1. Clone the repository:
-   ```bash
+```bash
    git clone <repository-url>
    cd androidCpp
-   ```
+```
 
 2. Compile shaders:
 
    **Option A: Using Slang (Recommended - Single SPIR-V file)**
-   ```bash
+```bash
    cd app/src/main/assets
    slangc shader.slang -target spirv -entry vertexMain -stage vertex -entry fragmentMain -stage fragment -o shader.spv
-   ```
-   Set `useCombinedSPIRV = true` in `VulkanRenderer.h` (default)
+```
+Set `useCombinedSPIRV = true` in `VulkanRenderer.h` (default)
 
-   **Option B: Using GLSL (Separate shader files)**
-   ```bash
+**Option B: Using GLSL (Separate shader files)**
+```bash
    cd app/src/main/assets
    glslc shader.vert -o shader.vert.spv
    glslc shader.frag -o shader.frag.spv
-   ```
-   Set `useCombinedSPIRV = false` in `VulkanRenderer.h`
+```
+Set `useCombinedSPIRV = false` in `VulkanRenderer.h`
 
-   *Note: Compiled shaders are included, so this step is optional unless modifying shaders*
+*Note: Compiled shaders are included, so this step is optional unless modifying shaders*
 
 3. Open project in Android Studio or build via command line:
-   ```bash
+```bash
    ./gradlew assembleDebug
-   ```
+```
 
 4. Install on device:
-   ```bash
+```bash
    ./gradlew installDebug
-   ```
+```
 
 ## Architecture
 
 - **Renderer**: `VulkanRenderer.cpp` - Complete Vulkan rendering pipeline
 - **Entry Point**: `main.cpp` - NativeActivity initialization and event loop
-- **Touch Input**: Quaternion-based rotation with slerp smoothing
+- **Touch Input**: `CameraController.cpp` Multi-touch gesture recognition with quaternion-based rotation, pinch-to-zoom, and 2-finger pan
 
 ### Dependencies
 
@@ -96,7 +117,8 @@ High-performance Vulkan renderer for Android using NativeActivity. Renders the c
 - **STB Image**: Single-header image loading library
 - **tiny_obj_loader**: Lightweight OBJ model parser
 - **android_native_app_glue**: NDK native activity support
-
+  
+(All are included in the project)
 ## Configuration
 
 Display settings in `MainActivity.kt`:
@@ -104,17 +126,20 @@ Display settings in `MainActivity.kt`:
 - 120Hz refresh rate selection
 - High refresh rate preference
 
+## Branches
+
+- **main**: Standard Vulkan 1.0 rendering pipeline
+- **dynamic-rendering**: Uses VK_KHR_dynamic_rendering extension for modern Vulkan rendering (eliminates render passes and framebuffers)
+
 ## Performance
+With viking room
+- **Present Mode**: VK_PRESENT_MODE_MAILBOX_KHR
 
 Tested on Xiaomi device with Mali GPU (MIUI):
 - **FPS**: 850-1050 sustained
 - **Display**: 120Hz (1220×2712)
-- **Present Mode**: VK_PRESENT_MODE_MAILBOX_KHR
 
-Tested on Xiaomi Redmi Note 4 (API 24):
+
+Tested on Xiaomi Redmi Note 4 (API 24) Qualcomm Adreno:
 - **FPS**: 300 sustained
 - **Configuration**: `useCombinedSPIRV = false`
-
-## License
-
-This project is provided as-is for educational purposes. The Viking Room model and textures are from the Vulkan Tutorial and are CC0 licensed.
