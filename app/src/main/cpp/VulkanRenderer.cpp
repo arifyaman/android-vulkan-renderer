@@ -506,7 +506,6 @@ void VulkanRenderer::createSwapChain() {
 
     swapChainImageFormat = surfaceFormat.format;
     swapChainExtent = extent;
-
     cameraController->setScreenDimensions(swapChainExtent.width,
                                           swapChainExtent.height);
 }
@@ -1445,7 +1444,6 @@ void VulkanRenderer::drawFrame() {
     } else if (result != VK_SUCCESS) {
         throw std::runtime_error("failed to present swap chain image!");
     }
-
     currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
 }
 

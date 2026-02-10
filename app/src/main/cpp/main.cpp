@@ -4,8 +4,6 @@
 #include "VulkanRenderer.h"
 #include "AndroidHelper.h"
 
-static WindowResizeState g_resizeState;
-
 extern "C"
 {
 
@@ -40,7 +38,7 @@ extern "C"
      */
     static void handle_cmd(android_app *app, int32_t cmd)
     {
-        AndroidHelper::handleCommand(app, cmd, g_resizeState);
+        AndroidHelper::handleCommand(app, cmd);
     }
 
     /*!

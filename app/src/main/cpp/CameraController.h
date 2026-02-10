@@ -19,7 +19,7 @@ class CameraController {
 public:
     CameraController(Camera& camera);
 
-    void setScreenDimensions(int32_t width, int32_t height) {
+    void setScreenDimensions(uint32_t width, uint32_t height) {
         screenWidth = width;
         screenHeight = height;
     }
@@ -42,8 +42,8 @@ private:
     // Reference to camera (not owned)
     Camera& camera;
 
-    int32_t screenWidth;
-    int32_t screenHeight;
+    uint32_t screenWidth;
+    uint32_t screenHeight;
     
     // Touch input state
     bool isDragging;
