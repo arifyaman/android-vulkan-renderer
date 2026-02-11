@@ -34,6 +34,12 @@ High-performance Vulkan renderer for Android using NativeActivity. Renders high-
 - Creator: [Kensyouen](https://sketchfab.com/Kensyouen)
 - Source: [Sketchfab - Just a Girl](https://sketchfab.com/3d-models/just-a-girl-b2359160a4f54e76b5ae427a55d9594d)
 
+**Alternative**: `viking_room.obj`
+- From vulkan tutorials
+- [CC BY 4.0](https://web.archive.org/web/20200428202538/https://sketchfab.com/3d-models/viking-room-a49f1b8e4f5c4ecf9e1fe7d81915ad38)
+- Creator: [nigelgoh](https://sketchfab.com/nigelgoh)
+- Source: [Sketchfab - Viking room](https://sketchfab.com/3d-models/viking-room-a49f1b8e4f5c4ecf9e1fe7d81915ad38)
+
 To switch models, update the filename in `VulkanRenderer.cpp` (```loadModel``` method).
 
 ## Tech Stack

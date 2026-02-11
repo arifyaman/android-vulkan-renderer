@@ -32,12 +32,6 @@ public:
     void setDistanceLimits(float min, float max);
     void setRotationSensitivity(float sensitivity);
     void setPanSensitivity(float sensitivity);
-    void setZoomThreshold(float threshold);
-    void setPanThreshold(float threshold);
-    
-    // Reset state
-    void reset();
-
 private:
     // Reference to camera (not owned)
     Camera& camera;
@@ -61,7 +55,7 @@ private:
     float panSensitivityMultiplier;
     float zoomThreshold;
     float panThreshold;
-    
+
     // Helper methods
     void handleTwoFingerGesture(float x1, float y1, float x2, float y2,
                                int32_t actionMasked, float maxDim);

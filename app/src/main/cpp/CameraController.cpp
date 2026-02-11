@@ -173,21 +173,3 @@ void CameraController::setRotationSensitivity(float sensitivity) {
 void CameraController::setPanSensitivity(float sensitivity) {
     panSensitivityMultiplier = sensitivity;
 }
-
-void CameraController::setZoomThreshold(float threshold) {
-    zoomThreshold = threshold;
-}
-
-void CameraController::setPanThreshold(float threshold) {
-    panThreshold = threshold;
-}
-
-void CameraController::reset() {
-    isDragging = false;
-    lastTouchX = 0.0f;
-    lastTouchY = 0.0f;
-    lastTwoFingerDistance = 0.0f;
-    lastTwoFingerMidpoint = glm::vec2(0.0f);
-    twoFingerStartCameraPos = glm::vec3(0.0f);
-    twoFingerStartTargetPos = glm::vec3(0.0f);
-}
