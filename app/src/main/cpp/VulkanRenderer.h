@@ -93,15 +93,7 @@ private:
     // Use combined SPIR-V file (Slang) or separate shader files (GLSL)
     const bool useCombinedSPIRV = true;
 
-    // Texture management strategy
-    enum class TexturePhase {
-        PHASE_1_TEXTURE_ARRAY,  // Current: Multiple texture bindings with indices (3-16 textures)
-        PHASE_2_BINDLESS        // Future: Descriptor indexing for 1000+ textures
-    };
-    TexturePhase texturePhase = TexturePhase::PHASE_1_TEXTURE_ARRAY;
-
     static constexpr int MAX_PHASE_1_TEXTURES = 16;  // Reasonable limit for mobile
-    static constexpr int MAX_PHASE_2_TEXTURES = 65536;  // Bindless limit
 
     // Material to texture mapping
     std::unordered_map<std::string, int> materialToTextureIndex;
@@ -131,7 +123,6 @@ private:
     VkImageView depthImageView = VK_NULL_HANDLE;
     VkRenderPass renderPass = VK_NULL_HANDLE;
     std::vector<VkFramebuffer> swapChainFramebuffers;
-    uint32_t mipLevels;
 
     // Multi-texture support (Phase 1: Texture Array, Phase 2: Bindless)
     std::vector<VkImage> textureImages;
@@ -187,9 +178,6 @@ private:
     void createRenderPass();
     void createFramebuffers();
     void createTextures();
-    void createTextureImages();
-    void createTextureImageViews();
-    void createTextureSamplers();
     void parseMTLFile(const std::string& mtlFilename);
     void loadModel();
     void createVertexBuffer();
@@ -231,8 +219,7 @@ private:
     void endSingleTimeCommands(VkCommandBuffer commandBuffer);
     void copyBuffer(VkBuffer srcBuffer, VkBuffer dstBuffer, VkDeviceSize size);
     uint32_t findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties);
-    void generateMipmaps(VkImage image, VkFormat imageFormat, int32_t texWidth, int32_t texHeight, uint32_t mipLevels);
-    VkSampleCountFlagBits getMaxUsableSampleCount();
+
 
     // Asset loading
     std::vector<char> readFile(const std::string& filename);
