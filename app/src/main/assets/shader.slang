@@ -1,13 +1,6 @@
-// Slang shader for Vulkan
+// Bindless Slang shader for Vulkan
 // Compile with: slangc shader.slang -target spirv -entry vertexMain -stage vertex -entry fragmentMain -stage fragment -o shader.spv
-// Or separately: slangc shader.slang -target spirv -entry vertexMain -stage vertex -o shader.vert.spv
-//                slangc shader.slang -target spirv -entry fragmentMain -stage fragment -o shader.frag.spv
-
-// Maximum number of textures (for Phase 1: Texture Array)
-// For Phase 2 (Bindless): This can be increased significantly
-#ifndef MAX_MATERIALS
-#define MAX_MATERIALS 65536
-#endif
+// Requires VK_EXT_descriptor_indexing extension
 
 struct UniformBufferObject
 {
@@ -19,10 +12,10 @@ struct UniformBufferObject
 [[vk::binding(0, 0)]]
 ConstantBuffer<UniformBufferObject> ubo;
 
-// Phase 1: Combined image sampler array
-// In SPIR-V, we bind both texture and sampler together
+// Bindless textures - unbounded array
+// This allows thousands of textures to be bound
 [[vk::binding(1, 0)]]
-Sampler2D texSamplers[MAX_MATERIALS];
+Sampler2D textures[];
 
 // Vertex shader input
 struct VertexInput
@@ -39,7 +32,7 @@ struct VertexOutput
     float4 position : SV_Position;
     [[vk::location(0)]] float3 color : COLOR;
     [[vk::location(1)]] float2 texCoord : TEXCOORD;
-    [[vk::location(2)]] int texIndex : TEXINDEX;
+    [[vk::location(2)]] nointerpolation int texIndex : TEXINDEX;
 };
 
 // Vertex shader entry point
@@ -70,7 +63,7 @@ struct FragmentOutput
 FragmentOutput fragmentMain(VertexOutput input)
 {
     FragmentOutput output;
-    // Phase 1: Sample from combined image sampler array based on texIndex
-    output.color = texSamplers[input.texIndex].Sample(input.texCoord);
+    // Bindless texture sampling with dynamic indexing
+    output.color = textures[NonUniformResourceIndex(input.texIndex)].Sample(input.texCoord);
     return output;
 }

@@ -1,4 +1,5 @@
 #version 450
+#extension GL_EXT_nonuniform_qualifier : enable
 
 layout(binding = 0) uniform UniformBufferObject {
     mat4 model;

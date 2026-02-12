@@ -54,8 +54,8 @@ namespace std {
     template<> struct hash<Vertex> {
         size_t operator()(Vertex const& vertex) const {
             return ((hash<glm::vec3>()(vertex.pos) ^ (hash<glm::vec3>()(vertex.color) << 1)) >> 1) ^
-                  (hash<glm::vec2>()(vertex.texCoord) << 1) ^
-                  (std::hash<int>()(vertex.texIndex) << 2);
+                   (hash<glm::vec2>()(vertex.texCoord) << 1) ^
+                   (std::hash<int>()(vertex.texIndex) << 2);
         }
     };
 }
@@ -84,7 +84,8 @@ private:
     static constexpr int MAX_FRAMES_IN_FLIGHT = 2;
     const std::vector<const char*> validationLayers = {"VK_LAYER_KHRONOS_validation"};
     const std::vector<const char*> deviceExtensions = {
-            VK_KHR_SWAPCHAIN_EXTENSION_NAME
+            VK_KHR_SWAPCHAIN_EXTENSION_NAME,
+            VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME  // Required for bindless
     };
 
     // Validation layers are not available on Android devices
@@ -93,7 +94,8 @@ private:
     // Use combined SPIR-V file (Slang) or separate shader files (GLSL)
     const bool useCombinedSPIRV = true;
 
-    static constexpr int MAX_PHASE_1_TEXTURES = 16;  // Reasonable limit for mobile
+    // Bindless texture support - can handle thousands of textures
+    static constexpr uint32_t MAX_BINDLESS_TEXTURES = 16384;  // Practical limit for mobile
 
     // Material to texture mapping
     std::unordered_map<std::string, int> materialToTextureIndex;
@@ -124,12 +126,12 @@ private:
     VkRenderPass renderPass = VK_NULL_HANDLE;
     std::vector<VkFramebuffer> swapChainFramebuffers;
 
-    // Multi-texture support (Phase 1: Texture Array, Phase 2: Bindless)
+    // Bindless texture resources
     std::vector<VkImage> textureImages;
     std::vector<VkDeviceMemory> textureImageMemories;
     std::vector<VkImageView> textureImageViews;
     std::vector<VkSampler> textureSamplers;
-    int numTextures = 0;
+    uint32_t numTextures = 0;
 
     std::vector<Vertex> vertices;
     std::vector<uint32_t> indices;
@@ -159,7 +161,9 @@ private:
     // Current surface transform from Vulkan (used to determine device orientation)
     VkSurfaceTransformFlagBitsKHR currentTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
 
-
+    // Descriptor indexing features and properties
+    VkPhysicalDeviceDescriptorIndexingFeaturesEXT descriptorIndexingFeatures{};
+    VkPhysicalDeviceDescriptorIndexingPropertiesEXT descriptorIndexingProperties{};
 
     // Initialization methods
     void initVulkan();
@@ -190,6 +194,11 @@ private:
 
     // Texture helper
     void loadSingleTexture(const std::string& filename, int textureIndex);
+
+    // Bindless support helpers
+    bool checkBindlessSupport();
+    void queryDescriptorIndexingProperties();
+
     // Helper methods
     void drawFrame();
     void recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIndex);
@@ -219,7 +228,6 @@ private:
     void endSingleTimeCommands(VkCommandBuffer commandBuffer);
     void copyBuffer(VkBuffer srcBuffer, VkBuffer dstBuffer, VkDeviceSize size);
     uint32_t findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties);
-
 
     // Asset loading
     std::vector<char> readFile(const std::string& filename);

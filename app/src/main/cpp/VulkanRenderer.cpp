@@ -175,15 +175,15 @@ void VulkanRenderer::initCamera() {
     cameraController->setPanSensitivity(2.0f);
 }
 
-void VulkanRenderer::handleTouchInput(float x1, float y1, float x2, float y2, 
-                                        int pointerCount, int32_t actionMasked) {
+void VulkanRenderer::handleTouchInput(float x1, float y1, float x2, float y2,
+                                      int pointerCount, int32_t actionMasked) {
     cameraController->handleTouchInput(x1, y1, x2, y2,
                                        pointerCount, actionMasked);
 }
 
 void VulkanRenderer::initVulkan() {
     initCamera();
-    
+
     createInstance();
     setupDebugMessenger();
     createSurface();
@@ -220,7 +220,7 @@ void VulkanRenderer::createInstance() {
     // Query and print Vulkan API version
     uint32_t apiVersion = VK_API_VERSION_1_0;
     auto vkEnumerateInstanceVersionPtr =
-        (PFN_vkEnumerateInstanceVersion)vkGetInstanceProcAddr(nullptr, "vkEnumerateInstanceVersion");
+            (PFN_vkEnumerateInstanceVersion)vkGetInstanceProcAddr(nullptr, "vkEnumerateInstanceVersion");
 
     if (vkEnumerateInstanceVersionPtr) {
         vkEnumerateInstanceVersionPtr(&apiVersion);
@@ -349,6 +349,12 @@ void VulkanRenderer::pickPhysicalDevice() {
     if (physicalDevice == VK_NULL_HANDLE) {
         throw std::runtime_error("failed to find a suitable GPU!");
     }
+
+    // Check and query bindless support
+    if (!checkBindlessSupport()) {
+        throw std::runtime_error("Selected device does not support bindless textures!");
+    }
+    queryDescriptorIndexingProperties();
 }
 
 void VulkanRenderer::createLogicalDevice() {
@@ -399,8 +405,19 @@ void VulkanRenderer::createLogicalDevice() {
     VkPhysicalDeviceFeatures deviceFeatures{};
     deviceFeatures.samplerAnisotropy = VK_TRUE;
 
+    // Enable descriptor indexing features for bindless
+    VkPhysicalDeviceDescriptorIndexingFeaturesEXT indexingFeatures{};
+    indexingFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES_EXT;
+    indexingFeatures.descriptorBindingPartiallyBound = VK_TRUE;
+    indexingFeatures.descriptorBindingVariableDescriptorCount = VK_TRUE;
+    indexingFeatures.runtimeDescriptorArray = VK_TRUE;
+    indexingFeatures.shaderSampledImageArrayNonUniformIndexing = VK_TRUE;
+    indexingFeatures.descriptorBindingUpdateUnusedWhilePending = VK_TRUE;
+    indexingFeatures.descriptorBindingSampledImageUpdateAfterBind = VK_TRUE;
+
     VkDeviceCreateInfo createInfo{};
     createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+    createInfo.pNext = &indexingFeatures;  // Chain indexing features
     createInfo.queueCreateInfoCount = static_cast<uint32_t>(queueCreateInfos.size());
     createInfo.pQueueCreateInfos = queueCreateInfos.data();
     createInfo.pEnabledFeatures = &deviceFeatures;
@@ -501,7 +518,7 @@ void VulkanRenderer::cleanupSwapChain() {
     for (auto framebuffer : swapChainFramebuffers) {
         vkDestroyFramebuffer(device, framebuffer, nullptr);
     }
-    
+
     vkDestroyRenderPass(device, renderPass, nullptr);
 
     for (auto imageView : swapChainImageViews) {
@@ -546,20 +563,37 @@ void VulkanRenderer::createDescriptorSetLayout() {
 
     VkDescriptorSetLayoutBinding samplerLayoutBinding{};
     samplerLayoutBinding.binding = 1;
-    samplerLayoutBinding.descriptorCount = MAX_PHASE_1_TEXTURES;
+    samplerLayoutBinding.descriptorCount = MAX_BINDLESS_TEXTURES;
     samplerLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     samplerLayoutBinding.pImmutableSamplers = nullptr;
     samplerLayoutBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 
     std::array<VkDescriptorSetLayoutBinding, 2> bindings = {uboLayoutBinding, samplerLayoutBinding};
+
+    // Bindless: Binding flags for descriptor indexing
+    VkDescriptorBindingFlagsEXT bindingFlags[2] = {};
+    bindingFlags[0] = 0;  // UBO uses default flags
+    bindingFlags[1] = VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT_EXT |
+                      VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT_EXT |
+                      VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT_EXT;
+
+    VkDescriptorSetLayoutBindingFlagsCreateInfoEXT bindingFlagsInfo{};
+    bindingFlagsInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO_EXT;
+    bindingFlagsInfo.bindingCount = 2;
+    bindingFlagsInfo.pBindingFlags = bindingFlags;
+
     VkDescriptorSetLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    layoutInfo.pNext = &bindingFlagsInfo;  // Chain binding flags
+    layoutInfo.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT_EXT;
     layoutInfo.bindingCount = static_cast<uint32_t>(bindings.size());
     layoutInfo.pBindings = bindings.data();
 
     if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &descriptorSetLayout) != VK_SUCCESS) {
         throw std::runtime_error("failed to create descriptor set layout!");
     }
+
+    aout << "Created bindless descriptor layout (max " << MAX_BINDLESS_TEXTURES << " textures)" << std::endl;
 }
 
 void VulkanRenderer::createGraphicsPipeline() {
@@ -729,7 +763,7 @@ void VulkanRenderer::createDepthResources() {
 
 void VulkanRenderer::createRenderPass() {
     VkFormat depthFormat = findDepthFormat();
-    
+
     VkAttachmentDescription colorAttachment{};
     colorAttachment.format = swapChainImageFormat;
     colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
@@ -792,8 +826,8 @@ void VulkanRenderer::createFramebuffers() {
 
     for (size_t i = 0; i < swapChainImageViews.size(); i++) {
         std::array<VkImageView, 2> attachments = {
-            swapChainImageViews[i],
-            depthImageView
+                swapChainImageViews[i],
+                depthImageView
         };
 
         VkFramebufferCreateInfo framebufferInfo{};
@@ -877,7 +911,7 @@ void VulkanRenderer::createTextures() {
 
     // Build a map from texture filename to array index
     std::map<std::string, int> textureFileToIndex;
-    
+
     // Get all unique texture filenames from materials (sorted for consistent ordering)
     std::set<std::string> textureFilenames;
     for (const auto& pair : materialToTextureFile) {
@@ -885,9 +919,9 @@ void VulkanRenderer::createTextures() {
         aout << "Material " << pair.first << " -> " << pair.second << std::endl;
     }
 
-    // For Phase 1, ensure we don't exceed MAX_PHASE_1_TEXTURES
-    if (textureFilenames.size() > MAX_PHASE_1_TEXTURES) {
-        throw std::runtime_error("Too many textures for Phase 1! Use Phase 2 (Bindless) for 100+ textures.");
+    // For Bindless, ensure we don't exceed MAX_BINDLESS_TEXTURES
+    if (textureFilenames.size() > MAX_BINDLESS_TEXTURES) {
+        throw std::runtime_error("Too many textures for Bindless! Use Bindless for 100+ textures.");
     }
 
     aout << "Total unique textures to load: " << textureFilenames.size() << std::endl;
@@ -921,7 +955,7 @@ void VulkanRenderer::createTextures() {
         if (materialToTextureFile.count(materialName)) {
             const std::string& textureFile = materialToTextureFile[materialName];
             pair.second = textureFileToIndex[textureFile];
-            aout << "Updated material " << materialName << " -> texture index " << pair.second 
+            aout << "Updated material " << materialName << " -> texture index " << pair.second
                  << " (file: " << textureFile << ")" << std::endl;
         }
     }
@@ -949,7 +983,7 @@ void VulkanRenderer::createTextures() {
     }
     aout << "Created " << textureImageViews.size() << " texture image views" << std::endl;
 
-    // Create samplers (one per texture for Phase 1)
+    // Create samplers (one per texture for Bindless)
     VkPhysicalDeviceProperties properties{};
     vkGetPhysicalDeviceProperties(physicalDevice, &properties);
 
@@ -1199,16 +1233,16 @@ void VulkanRenderer::loadModel() {
 
             if (vi >= 0 && vi * 3 + 2 < attrib.vertices.size()) {
                 vertex.pos = {
-                    attrib.vertices[3 * vi + 0],
-                    -attrib.vertices[3 * vi + 1],
-                    attrib.vertices[3 * vi + 2]
+                        attrib.vertices[3 * vi + 0],
+                        -attrib.vertices[3 * vi + 1],
+                        attrib.vertices[3 * vi + 2]
                 };
             }
 
             if (vti >= 0 && vti * 2 + 1 < attrib.texcoords.size()) {
                 vertex.texCoord = {
-                    attrib.texcoords[2 * vti + 0],
-                    1.0f - attrib.texcoords[2 * vti + 1]
+                        attrib.texcoords[2 * vti + 0],
+                        1.0f - attrib.texcoords[2 * vti + 1]
                 };
             }
 
@@ -1226,7 +1260,7 @@ void VulkanRenderer::loadModel() {
 
     aout << "Loaded " << vertices.size() << " vertices, " << indices.size() << " indices" << std::endl;
     aout << "Total materials: " << materialToTextureIndex.size() << std::endl;
-    
+
     // Calculate and log model bounds
     if (!vertices.empty()) {
         glm::vec3 minBounds(FLT_MAX);
@@ -1307,16 +1341,17 @@ void VulkanRenderer::createUniformBuffers() {
 }
 
 void VulkanRenderer::createDescriptorPool() {
-    // Phase 1: Allocate for MAX_PHASE_1_TEXTURES textures
-    // Phase 2 (Bindless): Will need much larger pool
+    // Bindless: Allocate for MAX_BINDLESS_TEXTURES textures
+    // Bindless: Will need much larger pool
     std::array<VkDescriptorPoolSize, 2> poolSizes{};
     poolSizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     poolSizes[0].descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
     poolSizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    poolSizes[1].descriptorCount = static_cast<uint32_t>(MAX_PHASE_1_TEXTURES * MAX_FRAMES_IN_FLIGHT);
+    poolSizes[1].descriptorCount = static_cast<uint32_t>(MAX_BINDLESS_TEXTURES * MAX_FRAMES_IN_FLIGHT);
 
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT_EXT;  // Required for bindless
     poolInfo.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
     poolInfo.pPoolSizes = poolSizes.data();
     poolInfo.maxSets = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
@@ -1324,13 +1359,24 @@ void VulkanRenderer::createDescriptorPool() {
     if (vkCreateDescriptorPool(device, &poolInfo, nullptr, &descriptorPool) != VK_SUCCESS) {
         throw std::runtime_error("failed to create descriptor pool!");
     }
-    aout << "Created descriptor pool with capacity for " << MAX_PHASE_1_TEXTURES << " textures" << std::endl;
+    aout << "Created descriptor pool with capacity for " << MAX_BINDLESS_TEXTURES << " textures" << std::endl;
 }
 
 void VulkanRenderer::createDescriptorSets() {
     std::vector<VkDescriptorSetLayout> layouts(MAX_FRAMES_IN_FLIGHT, descriptorSetLayout);
+
+    // Bindless: Variable descriptor count allocation
+    uint32_t maxVariableDescriptorCount = MAX_BINDLESS_TEXTURES;
+    std::vector<uint32_t> variableCounts(MAX_FRAMES_IN_FLIGHT, maxVariableDescriptorCount);
+
+    VkDescriptorSetVariableDescriptorCountAllocateInfoEXT variableCountInfo{};
+    variableCountInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_VARIABLE_DESCRIPTOR_COUNT_ALLOCATE_INFO_EXT;
+    variableCountInfo.descriptorSetCount = MAX_FRAMES_IN_FLIGHT;
+    variableCountInfo.pDescriptorCounts = variableCounts.data();
+
     VkDescriptorSetAllocateInfo allocInfo{};
     allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    allocInfo.pNext = &variableCountInfo;  // Chain variable count info
     allocInfo.descriptorPool = descriptorPool;
     allocInfo.descriptorSetCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
     allocInfo.pSetLayouts = layouts.data();
@@ -1347,8 +1393,9 @@ void VulkanRenderer::createDescriptorSets() {
         bufferInfo.range = sizeof(UniformBufferObject);
 
         std::vector<VkDescriptorImageInfo> textureInfos;
+        textureInfos.reserve(numTextures);
 
-        for (size_t t = 0; t < numTextures && t < MAX_PHASE_1_TEXTURES; t++) {
+        for (uint32_t t = 0; t < numTextures; t++) {
             VkDescriptorImageInfo imageInfo{};
             imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
             imageInfo.imageView = textureImageViews[t];
@@ -1368,19 +1415,21 @@ void VulkanRenderer::createDescriptorSets() {
         uboWrite.pBufferInfo = &bufferInfo;
         descriptorWrites.push_back(uboWrite);
 
-        VkWriteDescriptorSet textureWrite{};
-        textureWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        textureWrite.dstSet = descriptorSets[i];
-        textureWrite.dstBinding = 1;
-        textureWrite.dstArrayElement = 0;
-        textureWrite.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        textureWrite.descriptorCount = static_cast<uint32_t>(textureInfos.size());
-        textureWrite.pImageInfo = textureInfos.data();
-        descriptorWrites.push_back(textureWrite);
+        if (!textureInfos.empty()) {
+            VkWriteDescriptorSet textureWrite{};
+            textureWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            textureWrite.dstSet = descriptorSets[i];
+            textureWrite.dstBinding = 1;
+            textureWrite.dstArrayElement = 0;
+            textureWrite.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            textureWrite.descriptorCount = static_cast<uint32_t>(textureInfos.size());
+            textureWrite.pImageInfo = textureInfos.data();
+            descriptorWrites.push_back(textureWrite);
+        }
 
         vkUpdateDescriptorSets(device, static_cast<uint32_t>(descriptorWrites.size()), descriptorWrites.data(), 0, nullptr);
     }
-    aout << "Created descriptor sets with " << numTextures << " textures" << std::endl;
+    aout << "Bound " << numTextures << " textures to bindless descriptor sets" << std::endl;
 }
 
 void VulkanRenderer::createCommandBuffers() {
@@ -1435,7 +1484,7 @@ void VulkanRenderer::drawFrame() {
         frameCount = 0;
         lastFpsTime = currentTime;
     }
-    
+
     // Update camera damping for smooth rotation (FPS-independent)
     camera.updateTurntableDamping(deltaTime);
 
@@ -1698,7 +1747,32 @@ bool VulkanRenderer::isDeviceSuitable(VkPhysicalDevice device) {
     VkPhysicalDeviceFeatures supportedFeatures;
     vkGetPhysicalDeviceFeatures(device, &supportedFeatures);
 
-    return indices.isComplete() && extensionsSupported && swapChainAdequate && supportedFeatures.samplerAnisotropy;
+    // Check bindless support
+    VkPhysicalDeviceDescriptorIndexingFeaturesEXT indexingFeatures{};
+    indexingFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES_EXT;
+
+    VkPhysicalDeviceFeatures2 deviceFeatures2{};
+    deviceFeatures2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+    deviceFeatures2.pNext = &indexingFeatures;
+
+    // Use KHR extension version for compatibility
+    auto vkGetPhysicalDeviceFeatures2KHR = (PFN_vkGetPhysicalDeviceFeatures2KHR)vkGetInstanceProcAddr(instance, "vkGetPhysicalDeviceFeatures2KHR");
+    if (!vkGetPhysicalDeviceFeatures2KHR) {
+        vkGetPhysicalDeviceFeatures2KHR = (PFN_vkGetPhysicalDeviceFeatures2KHR)vkGetInstanceProcAddr(instance, "vkGetPhysicalDeviceFeatures2");
+    }
+    if (vkGetPhysicalDeviceFeatures2KHR) {
+        vkGetPhysicalDeviceFeatures2KHR(device, &deviceFeatures2);
+    } else {
+        return false;  // Can't check bindless support
+    }
+
+    bool bindlessSupported = indexingFeatures.descriptorBindingPartiallyBound &&
+                             indexingFeatures.descriptorBindingVariableDescriptorCount &&
+                             indexingFeatures.runtimeDescriptorArray &&
+                             indexingFeatures.shaderSampledImageArrayNonUniformIndexing;
+
+    return indices.isComplete() && extensionsSupported && swapChainAdequate &&
+           supportedFeatures.samplerAnisotropy && bindlessSupported;
 }
 
 bool VulkanRenderer::checkDeviceExtensionSupport(VkPhysicalDevice device) {
@@ -1754,6 +1828,7 @@ std::vector<const char*> VulkanRenderer::getRequiredExtensions() {
 
     extensions.push_back(VK_KHR_SURFACE_EXTENSION_NAME);
     extensions.push_back(VK_KHR_ANDROID_SURFACE_EXTENSION_NAME);
+    extensions.push_back(VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME);  // Required for descriptor indexing queries
 
     if (enableValidationLayers) {
         extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
@@ -1811,9 +1886,9 @@ VkFormat VulkanRenderer::findSupportedFormat(const std::vector<VkFormat>& candid
 }
 VkFormat VulkanRenderer::findDepthFormat() {
     return findSupportedFormat(
-        {VK_FORMAT_D32_SFLOAT, VK_FORMAT_D32_SFLOAT_S8_UINT, VK_FORMAT_D24_UNORM_S8_UINT},
-        VK_IMAGE_TILING_OPTIMAL,
-        VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT
+            {VK_FORMAT_D32_SFLOAT, VK_FORMAT_D32_SFLOAT_S8_UINT, VK_FORMAT_D24_UNORM_S8_UINT},
+            VK_IMAGE_TILING_OPTIMAL,
+            VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT
     );
 }
 
@@ -1914,12 +1989,12 @@ void VulkanRenderer::transitionImageLayout(VkImage image, VkFormat format, VkIma
     }
 
     vkCmdPipelineBarrier(
-        commandBuffer,
-        sourceStage, destinationStage,
-        0,
-        0, nullptr,
-        0, nullptr,
-        1, &barrier
+            commandBuffer,
+            sourceStage, destinationStage,
+            0,
+            0, nullptr,
+            0, nullptr,
+            1, &barrier
     );
 
     endSingleTimeCommands(commandBuffer);
@@ -2025,6 +2100,67 @@ uint32_t VulkanRenderer::findMemoryType(uint32_t typeFilter, VkMemoryPropertyFla
 
     throw std::runtime_error("failed to find suitable memory type!");
 }
+
+
+bool VulkanRenderer::checkBindlessSupport() {
+    VkPhysicalDeviceDescriptorIndexingFeaturesEXT indexingFeatures{};
+    indexingFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES_EXT;
+
+    VkPhysicalDeviceFeatures2 deviceFeatures2{};
+    deviceFeatures2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+    deviceFeatures2.pNext = &indexingFeatures;
+
+    // Use KHR extension version for compatibility
+    auto vkGetPhysicalDeviceFeatures2KHR = (PFN_vkGetPhysicalDeviceFeatures2KHR)vkGetInstanceProcAddr(instance, "vkGetPhysicalDeviceFeatures2KHR");
+    if (!vkGetPhysicalDeviceFeatures2KHR) {
+        vkGetPhysicalDeviceFeatures2KHR = (PFN_vkGetPhysicalDeviceFeatures2KHR)vkGetInstanceProcAddr(instance, "vkGetPhysicalDeviceFeatures2");
+    }
+    if (!vkGetPhysicalDeviceFeatures2KHR) {
+        aout << "ERROR: vkGetPhysicalDeviceFeatures2 not available" << std::endl;
+        return false;
+    }
+    vkGetPhysicalDeviceFeatures2KHR(physicalDevice, &deviceFeatures2);
+
+    bool supported = indexingFeatures.descriptorBindingPartiallyBound &&
+                     indexingFeatures.descriptorBindingVariableDescriptorCount &&
+                     indexingFeatures.runtimeDescriptorArray &&
+                     indexingFeatures.shaderSampledImageArrayNonUniformIndexing;
+
+    if (supported) {
+        aout << "Bindless textures supported!" << std::endl;
+        descriptorIndexingFeatures = indexingFeatures;
+    } else {
+        aout << "WARNING: Bindless textures NOT supported" << std::endl;
+    }
+
+    return supported;
+}
+
+void VulkanRenderer::queryDescriptorIndexingProperties() {
+    descriptorIndexingProperties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_PROPERTIES_EXT;
+
+    VkPhysicalDeviceProperties2 deviceProperties2{};
+    deviceProperties2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+    deviceProperties2.pNext = &descriptorIndexingProperties;
+
+    // Use KHR extension version for compatibility
+    auto vkGetPhysicalDeviceProperties2KHR = (PFN_vkGetPhysicalDeviceProperties2KHR)vkGetInstanceProcAddr(instance, "vkGetPhysicalDeviceProperties2KHR");
+    if (!vkGetPhysicalDeviceProperties2KHR) {
+        vkGetPhysicalDeviceProperties2KHR = (PFN_vkGetPhysicalDeviceProperties2KHR)vkGetInstanceProcAddr(instance, "vkGetPhysicalDeviceProperties2");
+    }
+    if (!vkGetPhysicalDeviceProperties2KHR) {
+        aout << "ERROR: vkGetPhysicalDeviceProperties2 not available" << std::endl;
+        return;
+    }
+    vkGetPhysicalDeviceProperties2KHR(physicalDevice, &deviceProperties2);
+
+    aout << "Descriptor Indexing Limits:" << std::endl;
+    aout << "  Max per-stage textures: "
+         << descriptorIndexingProperties.maxPerStageDescriptorUpdateAfterBindSampledImages << std::endl;
+    aout << "  Max descriptor set textures: "
+         << descriptorIndexingProperties.maxDescriptorSetUpdateAfterBindSampledImages << std::endl;
+}
+
 
 std::vector<char> VulkanRenderer::readFile(const std::string& filename) {
     AAsset* file = AAssetManager_open(app_->activity->assetManager, filename.c_str(), AASSET_MODE_BUFFER);
